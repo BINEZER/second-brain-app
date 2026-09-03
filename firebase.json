@@ -1,0 +1,12 @@
+{
+  "hosting": {
+    "public": "second-brain-website",
+    "ignore": [
+      "firebase.json",
+      "**/.*"
+    ]
+  },
+  "firestore": {
+    "rules": "firestore.rules"
+  }
+}

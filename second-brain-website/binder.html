@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<meta name="theme-color" content="#F4F5F7" />
+<title>Life Binder — Second Brain</title>
+<link rel="icon" type="image/svg+xml" href="/icon.svg" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<style>
+:root{--bg:#F4F5F7;--card:#FFFFFF;--line:#E4E6EB;--ink:#17181C;--ink2:#4B4F58;--mut:#8A8F99;--acc:#4338CA;--amber:#B45309;--amberbg:rgba(245,158,11,.09);--amberln:rgba(217,119,6,.35);--good:#15803D;}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--ink);font-family:Inter,system-ui,sans-serif;font-size:15px;line-height:1.5;-webkit-font-smoothing:antialiased}
+.wrap{max-width:880px;margin:0 auto;padding:28px 18px 80px}
+header.top{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:6px}
+h1{font-family:'Space Grotesk',Inter,sans-serif;font-size:24px;font-weight:700}
+.back{font-size:13px;font-weight:600;color:var(--acc);text-decoration:none;white-space:nowrap}
+.sub{color:var(--mut);font-size:13.5px;margin-bottom:22px}
+.openbox{border:1px solid var(--amberln);background:var(--amberbg);border-radius:14px;padding:16px 18px;margin-bottom:26px}
+.openbox h2{font-size:11px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--amber);margin-bottom:10px}
+.openbox ul{list-style:none}
+.openbox li{font-size:14px;padding:5px 0;border-top:1px dashed var(--amberln)}
+.openbox li:first-child{border-top:none;padding-top:0}
+.openbox li b{cursor:pointer}
+.openbox li b:hover{text-decoration:underline}
+.openbox .none{color:var(--mut);font-size:13.5px;font-style:italic}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(255px,1fr));gap:12px}
+.area{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;cursor:pointer;transition:border-color .15s, box-shadow .15s;position:relative}
+.area:hover{border-color:#C9CDDA;box-shadow:0 2px 10px rgba(20,20,40,.06)}
+.area h3{font-family:'Space Grotesk',Inter,sans-serif;font-size:15.5px;font-weight:600;margin-bottom:5px;padding-right:20px}
+.area p{font-size:13px;color:var(--ink2);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.area .meta{margin-top:10px;font-size:11.5px;color:var(--mut)}
+.flag{position:absolute;top:14px;right:14px;width:8px;height:8px;border-radius:50%;background:#F59E0B}
+.dlg{position:fixed;inset:0;background:rgba(23,24,28,.45);display:none;align-items:flex-start;justify-content:center;padding:24px 12px;overflow-y:auto;z-index:50}
+.dlg.on{display:flex}
+.panel{background:var(--card);border-radius:18px;max-width:760px;width:100%;padding:26px 26px 30px;margin-bottom:40px}
+.panel h2{font-family:'Space Grotesk',Inter,sans-serif;font-size:20px;font-weight:700;margin-bottom:2px;padding-right:60px}
+.ptools{float:right;display:flex;gap:8px}
+.btn{font:inherit;font-size:12.5px;font-weight:600;padding:6px 14px;border-radius:9px;border:1px solid var(--line);background:#fff;color:var(--ink2);cursor:pointer}
+.btn:hover{border-color:#C9CDDA}
+.btn.pri{background:var(--acc);border-color:var(--acc);color:#fff}
+.btn.warn{color:var(--amber);border-color:var(--amberln)}
+.purpose{color:var(--ink2);font-size:14.5px;margin:8px 0 4px}
+.gp{margin:16px 0;padding:13px 16px;border-left:3px solid var(--acc);background:#F6F6FB;border-radius:0 10px 10px 0;font-size:14px;font-style:italic;color:#3A3D66}
+.sec{margin-top:22px}
+.sec>h4{font-size:11px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--acc);padding-bottom:7px;border-bottom:1px solid var(--line);margin-bottom:11px}
+.sec>h4 small{float:right;color:var(--mut);font-weight:500;text-transform:none;letter-spacing:0}
+ul.fw{list-style:none}
+ul.fw li{font-size:14px;padding:5px 0 5px 18px;position:relative}
+ul.fw li::before{content:"";position:absolute;left:2px;top:13px;width:6px;height:6px;border-radius:50%;background:#C7CAD4}
+table.rt{width:100%;border-collapse:collapse;font-size:13.5px}
+table.rt th{text-align:left;font-size:10.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--mut);font-weight:600;padding:0 10px 7px 0}
+table.rt td{padding:8px 10px 8px 0;border-top:1px solid var(--line);vertical-align:top}
+td.cad{white-space:nowrap;font-weight:600;font-size:12px;color:var(--acc)}
+td.anc{color:var(--ink2)}
+td.anc::before{content:"⚓ ";opacity:.55;font-size:11px}
+.anchor-note{font-size:12px;color:var(--mut);font-style:italic;margin-top:8px}
+ul.oi{list-style:none}
+ul.oi li{display:flex;gap:9px;align-items:flex-start;font-size:14px;padding:6px 0}
+ul.oi li::before{content:"⚑";color:#F59E0B;font-size:13px;line-height:1.5}
+.editbox textarea,.editbox input{font:inherit;font-size:13.5px;width:100%;border:1px solid var(--line);border-radius:9px;padding:8px 10px;background:#FBFBFD;margin-bottom:8px;resize:vertical}
+.editbox label{display:block;font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--mut);margin:14px 0 5px}
+.hint{font-size:12px;color:var(--mut);margin-top:-4px;margin-bottom:6px}
+.savebar{margin-top:20px;display:flex;gap:10px;justify-content:flex-end}
+.toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);background:#17181C;color:#fff;font-size:13px;padding:9px 18px;border-radius:99px;opacity:0;transition:opacity .25s;pointer-events:none;z-index:99}
+.toast.on{opacity:.94}
+.loading{color:var(--mut);font-size:14px;padding:60px 0;text-align:center}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <h1>Life Binder</h1>
+    <a class="back" href="/">← Second Brain</a>
+  </header>
+  <p class="sub">16 life areas · routines anchored to events, not clock times</p>
+  <div class="openbox" id="openbox">
+    <h2>Open items across all areas</h2>
+    <div id="openlist" class="none">Loading…</div>
+  </div>
+  <div class="grid" id="grid"><div class="loading">Loading your binder…</div></div>
+</div>
+
+<div class="dlg" id="dlg"><div class="panel" id="panel"></div></div>
+<div class="toast" id="toast"></div>
+
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
+<script src="/firebase-init.js"></script>
+<script src="/binder-data.js"></script>
+<script>
+var CUR=-1, EDITING=false;
+function esc(s){return String(s==null?"":s).replace(/[&<>"']/g,function(c){return{"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]})}
+function toast(m){var t=document.getElementById('toast');t.textContent=m;t.classList.add('on');setTimeout(function(){t.classList.remove('on')},2200)}
+function areas(){return window.SB_LB.areas()}
+
+function renderOpen(){
+  var items=window.SB_LB.get(), el=document.getElementById('openlist');
+  if(!items.length){el.className='none';el.textContent='Nothing flagged right now — all areas clear.';return}
+  el.className='';
+  el.innerHTML='<ul>'+items.map(function(x){
+    var idx=areas().findIndex(function(a){return a.name===x.area});
+    return '<li><b data-i="'+idx+'">'+esc(x.area)+':</b> '+esc(x.text)+'</li>';
+  }).join('')+'</ul>';
+  el.querySelectorAll('b[data-i]').forEach(function(b){b.onclick=function(){openArea(+b.dataset.i)}});
+}
+function renderGrid(){
+  var g=document.getElementById('grid');
+  g.innerHTML=areas().map(function(a,i){
+    return '<div class="area" data-i="'+i+'">'+((a.open_items||[]).length?'<span class="flag" title="Has open items"></span>':'')+
+    '<h3>'+esc(a.name)+'</h3><p>'+esc(a.purpose)+'</p>'+
+    '<div class="meta">'+(a.framework||[]).length+' threads · '+(a.routines||[]).length+' routines'+((a.open_items||[]).length?' · <span style="color:#B45309;font-weight:600">'+(a.open_items||[]).length+' open</span>':'')+'</div></div>';
+  }).join('');
+  g.querySelectorAll('.area').forEach(function(el){el.onclick=function(){openArea(+el.dataset.i)}});
+}
+function openArea(i){
+  CUR=i; EDITING=false;
+  document.getElementById('dlg').classList.add('on');
+  renderPanel();
+}
+function closeDlg(){document.getElementById('dlg').classList.remove('on');CUR=-1;EDITING=false}
+document.getElementById('dlg').addEventListener('click',function(e){if(e.target===this && !EDITING)closeDlg()});
+
+function renderPanel(){
+  var a=areas()[CUR], p=document.getElementById('panel');
+  if(!a)return;
+  if(!EDITING){
+    p.innerHTML='<div class="ptools"><button class="btn" id="bedit">Edit</button><button class="btn" id="bclose">Close</button></div>'+
+    '<h2>'+esc(a.name)+'</h2>'+
+    '<p class="purpose">'+esc(a.purpose)+'</p>'+
+    '<div class="gp">“'+esc(a.guiding_principle)+'”</div>'+
+    ((a.open_items||[]).length?'<div class="sec"><h4 style="color:#B45309;border-color:var(--amberln)">Open items</h4><ul class="oi">'+(a.open_items||[]).map(function(o){return '<li>'+esc(o)+'</li>'}).join('')+'</ul></div>':'')+
+    '<div class="sec"><h4>Framework <small>'+(a.framework||[]).length+' threads</small></h4><ul class="fw">'+(a.framework||[]).map(function(f){return '<li>'+esc(f)+'</li>'}).join('')+'</ul></div>'+
+    '<div class="sec"><h4>Routines <small>anchored, not scheduled</small></h4><table class="rt"><tr><th>Cadence</th><th>Action</th><th>Anchor</th></tr>'+
+    (a.routines||[]).map(function(r){return '<tr><td class="cad">'+esc(r.cadence)+'</td><td>'+esc(r.action)+'</td><td class="anc">'+esc(r.anchor)+'</td></tr>'}).join('')+
+    '</table><p class="anchor-note">Anchors are triggers — an event or state, deliberately not a clock time.</p></div>';
+    document.getElementById('bedit').onclick=function(){EDITING=true;renderPanel()};
+    document.getElementById('bclose').onclick=closeDlg;
+  } else {
+    p.innerHTML='<h2>Edit — '+esc(a.name)+'</h2><div class="editbox">'+
+    '<label>Name</label><input id="e_name" value="'+esc(a.name)+'"/>'+
+    '<label>Purpose</label><textarea id="e_purpose" rows="2">'+esc(a.purpose)+'</textarea>'+
+    '<label>Guiding principle</label><textarea id="e_gp" rows="2">'+esc(a.guiding_principle)+'</textarea>'+
+    '<label>Framework</label><p class="hint">One thread per line.</p><textarea id="e_fw" rows="6">'+esc((a.framework||[]).join("\n"))+'</textarea>'+
+    '<label>Routines</label><p class="hint">One per line, three parts separated by " | " — Cadence | Action | Anchor.</p><textarea id="e_rt" rows="8">'+esc((a.routines||[]).map(function(r){return r.cadence+" | "+r.action+" | "+r.anchor}).join("\n"))+'</textarea>'+
+    '<label>Open items</label><p class="hint">One per line. These surface on the main app\'s Now page. Leave empty when resolved.</p><textarea id="e_oi" rows="3">'+esc((a.open_items||[]).join("\n"))+'</textarea>'+
+    '</div><div class="savebar"><button class="btn" id="bcancel">Cancel</button><button class="btn pri" id="bsave">Save</button></div>';
+    document.getElementById('bcancel').onclick=function(){EDITING=false;renderPanel()};
+    document.getElementById('bsave').onclick=function(){
+      var next=JSON.parse(JSON.stringify(areas()));
+      var lines=function(id){return document.getElementById(id).value.split("\n").map(function(x){return x.trim()}).filter(Boolean)};
+      next[CUR].name=document.getElementById('e_name').value.trim()||next[CUR].name;
+      next[CUR].purpose=document.getElementById('e_purpose').value.trim();
+      next[CUR].guiding_principle=document.getElementById('e_gp').value.trim();
+      next[CUR].framework=lines('e_fw');
+      next[CUR].routines=lines('e_rt').map(function(l){var parts=l.split("|").map(function(x){return x.trim()});return {cadence:parts[0]||"",action:parts[1]||"",anchor:parts[2]||""}});
+      next[CUR].open_items=lines('e_oi');
+      window.SB_LB.save(next);
+      EDITING=false; renderPanel(); renderGrid(); renderOpen();
+      toast('Saved — synced to cloud');
+    };
+  }
+}
+window.SB_LB.load().then(function(){renderGrid();renderOpen()});
+</script>
+</body>
+</html>

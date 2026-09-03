@@ -1,0 +1,10 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Open access, no auth — matches the app's current (Supabase) posture:
+    // anyone with the client config can read/write these 3 documents.
+    match /snapshots/{docId} {
+      allow read, write: if true;
+    }
+  }
+}
