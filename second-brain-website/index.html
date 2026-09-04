@@ -210,6 +210,7 @@
       .sub-row{display:flex;align-items:center;gap:10px;padding:6px 0;font-size:13.5px}
       .sub-add{display:flex;gap:8px;margin-top:8px}
       .sub-add input{flex:1;padding:7px 10px;border-radius:8px;border:1px solid var(--c-border);background:var(--c-surface);font-size:13px}
+      .list-num{font-family:'JetBrains Mono',monospace;font-size:11.5px;font-weight:600;color:var(--c-text-muted);font-variant-numeric:tabular-nums;min-width:22px;text-align:right;flex-shrink:0;padding-top:2px}
       .import-box{width:100%;min-height:130px;padding:11px 13px;border-radius:10px;border:1px solid var(--c-border);background:var(--c-surface-alt);color:var(--c-text);font-family:'JetBrains Mono',monospace;font-size:11.5px;line-height:1.55;resize:vertical}
       .import-box:focus{outline:2px solid var(--c-info-dim);border-color:var(--c-info)}
       .import-plan{border:1px solid var(--c-border);border-radius:10px;padding:12px 14px;background:var(--c-surface-alt);margin-top:12px;font-size:13px}
@@ -419,6 +420,7 @@ function loadRoot(){
   if(!Array.isArray(st.settings.nowPins)) st.settings.nowPins=[];
   st.settings.nowPins = st.settings.nowPins.slice(0,3);
   if(!st.settings.themeMode) st.settings.themeMode = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark':'light';
+  if(typeof st.settings.numberLists!=='boolean') st.settings.numberLists = false;
   if(!Array.isArray(st.lifeAreas)) st.lifeAreas = [];
   st.lifeAreas.forEach(a=>{
     if(!Array.isArray(a.framework)) a.framework=[];
@@ -591,6 +593,9 @@ function projects(){ return items().filter(i=>i.type==='project'); }
 function tasksOf(projectId){ return items().filter(i=>i.projectId===projectId); }
 function followups(){ return items().filter(i=>i.type==='followup'); }
 function nowPins(){ return state.state.settings.nowPins; }
+/* Optional 1., 2., 3. prefixes so a list can be talked about by position. */
+function numbersOn(){ return !!state.state.settings.numberLists; }
+function numLabel(i){ return numbersOn() ? `<span class="list-num">${i+1}.</span>` : ''; }
 
 /* =========================================================
    Project analytics — one source of truth for every % in the app.
@@ -1069,7 +1074,6 @@ function renderNowView(){
   const pins = nowPins().map(byId).filter(Boolean);
   const pipeline = upNextCandidates().slice(0,6);
   return `<div class="view">
-    ${renderHabitStrip(true)}
     <div class="view-head">
       <div><div class="view-title">Now</div><div class="view-sub">Your top ${pins.length} focus item${pins.length===1?'':'s'} — nothing else matters right now.</div></div>
       ${renderTodayStamp()}
@@ -1083,8 +1087,9 @@ function renderNowView(){
         <div class="pipeline-title">⏭ Up next pipeline</div>
         <span class="view-sub" style="margin:0">Starred / high-priority, auto-fills open slots</span>
       </div>
-      ${pipeline.length? pipeline.map(it=>renderPipelineRow(it)).join('') : `<div class="empty" style="padding:20px">Nothing queued — star a task to add it here.</div>`}
+      ${pipeline.length? pipeline.map((it,i)=>renderPipelineRow(it,i)).join('') : `<div class="empty" style="padding:20px">Nothing queued — star a task to add it here.</div>`}
     </div>
+    ${renderHabitStrip(true)}
   </div>`;
 }
 
@@ -1102,8 +1107,9 @@ function renderFocusCard(it, num){
   </div>`;
 }
 
-function renderPipelineRow(it){
+function renderPipelineRow(it, i){
   return `<div class="pipeline-row">
+    ${numLabel(i)}
     <span class="dot pri-dot pri-${it.priority}"></span>
     <div class="item-main"><div class="item-title">${esc(it.title)}</div>${renderMeta(it)}</div>
     <button class="btn btn-sm" data-action="toggle-pin" data-id="${it.id}">+ Now</button>
@@ -1178,18 +1184,21 @@ function renderInboxView(){
       <button class="chip ${ui.inboxAssigneeFilter==='all'?'on':''}" data-action="filter-assignee" data-assignee="all">All</button>
       ${assignees.map(a=>`<button class="chip ${ui.inboxAssigneeFilter===a?'on':''}" data-action="filter-assignee" data-assignee="${esc(a)}">👤 ${esc(a)}</button>`).join('')}
     </div>` : ''}
-    ${list.length? list.map(renderInboxRow).join('') : (all.length? `<div class="empty">No items assigned to ${esc(ui.inboxAssigneeFilter)}.</div>` : `<div class="empty">Inbox zero 🎉 — nothing waiting to be triaged.</div>`)}
+    ${list.length? list.map((it,i)=>renderInboxRow(it,i)).join('') : (all.length? `<div class="empty">No items assigned to ${esc(ui.inboxAssigneeFilter)}.</div>` : `<div class="empty">Inbox zero 🎉 — nothing waiting to be triaged.</div>`)}
   </div>`;
 }
 
-function renderInboxRow(it){
+function renderInboxRow(it, i){
+  const pinned = nowPins().indexOf(it.id)>=0;
   return `<div class="item-row">
+    ${numLabel(i)}
     <button class="check ${it.status==='done'?'done':''}" data-action="complete" data-id="${it.id}">${checkSvg()}</button>
     <div class="item-main">
       <div class="item-title">${esc(it.title)}</div>
       <div class="item-meta"><span class="dot pri-dot pri-${it.priority}"></span><span class="pri-${it.priority}">${it.priority}</span>${it.assignee?`<span class="chip">👤 ${esc(it.assignee)}</span>`:''}</div>
     </div>
     <div class="item-actions">
+      <button class="icon-btn btn-sm" data-action="toggle-pin" data-id="${it.id}" title="${pinned?'Unpin from Now':'Pin to Now / Today'}" style="${pinned?'color:var(--c-focus)':''}">📌</button>
       <button class="btn btn-sm" data-action="convert-project" data-id="${it.id}" title="Convert to a Project">→ Project</button>
       <button class="btn btn-sm btn-ghost" data-action="open-editor" data-id="${it.id}">Edit</button>
       <button class="icon-btn btn-sm btn-danger" data-action="delete" data-id="${it.id}">✕</button>
@@ -1242,7 +1251,7 @@ function renderProjectsView(){
       <button class="chip ${ui.showArchived?'on':''}" data-action="toggle-archived" style="margin-left:auto">${ui.showArchived?'Hide':'Show'} archived</button>
     </div>
     ${renderProjectsSummary(list)}
-    ${list.length? list.map(renderProjectCard).join('') : `<div class="empty">No projects in this domain yet.</div>`}
+    ${list.length? list.map((p,i)=>renderProjectCard(p,i)).join('') : `<div class="empty">No projects in this domain yet.</div>`}
   </div>`;
 }
 
@@ -1258,13 +1267,14 @@ function renderProjectsSummary(list){
   return `<div class="view-sub" style="margin:-6px 0 16px">${bits.join(' · ')} · <a href="#" data-action="open-portfolio-report" style="color:var(--c-focus);font-weight:600">full roll-up →</a></div>`;
 }
 
-function renderProjectCard(p){
+function renderProjectCard(p, i){
   const children = tasksOf(p.id);
   const st = projectStats(p);
   const expanded = ui.expandedProjects.has(p.id);
   const archived = inactiveProjects.indexOf(p.id)>=0;
   return `<div class="project-card" style="${archived?'opacity:.55':''}">
     <div class="project-head" data-action="toggle-expand" data-id="${p.id}">
+      ${numLabel(i)}
       <button class="check ${p.status==='done'?'done':''}" data-action="complete" data-id="${p.id}">${checkSvg()}</button>
       <div class="item-main">
         <div class="project-title">${esc(p.title)} ${p.isStarred?'⭐':''}</div>
@@ -1295,8 +1305,9 @@ function renderProjectBody(p, children){
   return `<div class="project-body">
     <div class="section-label">Milestones <span style="text-transform:none;letter-spacing:0;font-weight:500">— tap S/M/L/XL to size a step</span></div>
     <div class="sub-list">
-      ${p.subtasks.map(s=>`
+      ${p.subtasks.map((s,si)=>`
         <div class="sub-row">
+          ${numLabel(si)}
           <button class="check ${s.done?'done':''}" style="width:17px;height:17px" data-action="toggle-subtask" data-id="${p.id}" data-sub="${s.id}">${checkSvg()}</button>
           ${effortChip(s.effort, `data-id="${p.id}" data-sub="${s.id}"`)}
           <span style="${s.done?'text-decoration:line-through;color:var(--c-text-muted)':''}">${esc(s.title)}</span>
@@ -1307,8 +1318,9 @@ function renderProjectBody(p, children){
       </div>
     </div>
     <div class="section-label">Tasks</div>
-    ${children.map(c=>`
+    ${children.map((c,ci)=>`
       <div class="item-row" style="background:var(--c-surface)">
+        ${numLabel(ci)}
         <button class="check ${c.status==='done'?'done':''}" data-action="complete" data-id="${c.id}">${checkSvg()}</button>
         ${effortChip(c.effort, `data-id="${c.id}"`)}
         <div class="item-main">
@@ -1641,14 +1653,15 @@ function renderReportsProjectsView(){
     </div>
     ${rows.filter(r=>r.st.hasPlan).length? chartCard('chart-projects', Math.max(140,rows.filter(r=>r.st.hasPlan).length*34)) : ''}
     <div class="view-sub" style="margin-bottom:12px">Bar = work done. Grey tick = how much of the project's time window has been spent.</div>
-    ${rows.length? rows.map(r=>renderProjectReportRow(r.p, r.st)).join('') : `<div class="empty">No projects match this filter.</div>`}
+    ${rows.length? rows.map((r,i)=>renderProjectReportRow(r.p, r.st, i)).join('') : `<div class="empty">No projects match this filter.</div>`}
   `;
 }
 
-function renderProjectReportRow(p, st){
+function renderProjectReportRow(p, st, i){
   st = st || projectStats(p);
   return `<div class="project-card">
     <div class="project-head" data-action="open-project-report" data-id="${p.id}">
+      ${numLabel(i)}
       <div class="item-main">
         <div class="project-title">${esc(p.title)}</div>
         <div class="item-meta">
@@ -1766,6 +1779,13 @@ function renderSettingsView(){
         <div class="view-sub" style="margin-top:2px">Currently ${state.state.settings.themeMode==='dark'?'Dark':'Light'} mode.</div>
       </div>
       <button class="btn" data-action="toggle-theme">${state.state.settings.themeMode==='dark'?'Switch to Light':'Switch to Dark'}</button>
+    </div>
+    <div class="card" style="margin-bottom:22px;display:flex;align-items:center;justify-content:space-between;gap:12px">
+      <div>
+        <div style="font-weight:600;font-size:14.5px">Numbered lists</div>
+        <div class="view-sub" style="margin-top:2px">Number projects, milestones, tasks, inbox items and the Now pipeline, so you can refer to them by position.</div>
+      </div>
+      <button class="btn" data-action="toggle-numbering">${numbersOn()?'Turn off':'Turn on'}</button>
     </div>
     <div class="section-label">Import</div>
     <div class="card" style="margin-bottom:22px">
@@ -2385,6 +2405,7 @@ function handleAction(action, el){
   switch(action){
     case 'nav': ui.view = el.getAttribute('data-view'); ui.processInbox=false; render(); break;
     case 'toggle-sidebar': ui.sidebarCollapsed = !ui.sidebarCollapsed; render(); break;
+    case 'toggle-numbering': state.state.settings.numberLists = !numbersOn(); persist(); break;
     case 'toggle-theme':
       state.state.settings.themeMode = state.state.settings.themeMode==='dark' ? 'light':'dark';
       persist(); break;
