@@ -104,6 +104,9 @@
       .view{padding:24px 28px 80px;max-width:980px;width:100%;margin:0 auto}
       .view-head{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;margin-bottom:20px;flex-wrap:wrap}
       .view-title{font-family:'Space Grotesk',sans-serif;font-size:24px;font-weight:700}
+      .today-stamp{text-align:right;line-height:1.35;flex-shrink:0}
+      .today-day{font-family:'Space Grotesk',sans-serif;font-size:15px;font-weight:600;color:var(--c-text)}
+      .today-date{font-family:'JetBrains Mono',monospace;font-size:12.5px;color:var(--c-text-muted)}
       .view-sub{color:var(--c-text-muted);font-size:13.5px;margin-top:3px}
 
       /* ---------- buttons ---------- */
@@ -311,9 +314,10 @@ const HEALTH_META = {
   ontrack: { cls:'health-ontrack', label:'On track' },
   ahead:   { cls:'health-ahead',   label:'Ahead' },
   nodate:  { cls:'health-nodate',  label:'No due date' },
+  notstarted: { cls:'health-nodate', label:'Not started' },
   noplan:  { cls:'health-noplan',  label:'No plan' }
 };
-const HEALTH_ORDER = ['overdue','behind','risk','ontrack','ahead','nodate','noplan','done'];
+const HEALTH_ORDER = ['overdue','behind','risk','ontrack','ahead','nodate','notstarted','noplan','done'];
 
 /* =========================================================
    Small utilities
@@ -403,6 +407,7 @@ function loadRoot(){
     if(!it.type) it.type='task';
     if(!it.status) it.status='open';
     if(!EFFORT[it.effort]) it.effort = DEFAULT_EFFORT;
+    if(it.startDate===undefined) it.startDate = null;   // schedule window start; falls back to createdAt
   });
   st.settings = st.settings || {};
   if(!Array.isArray(st.settings.nowPins)) st.settings.nowPins=[];
@@ -589,6 +594,15 @@ function nowPins(){ return state.state.settings.nowPins; }
    is what tells you whether a project is actually healthy.
    ========================================================= */
 function effortWeight(x){ return (EFFORT[x && x.effort] || EFFORT[DEFAULT_EFFORT]).weight; }
+/* A project's schedule window opens on its start date if it has one, else on creation. */
+function explicitStartMs(p){
+  const t = p.startDate ? Date.parse(p.startDate+'T00:00:00') : NaN;
+  return isNaN(t) ? null : t;
+}
+function projectStartMs(p){
+  const t = explicitStartMs(p);
+  return t!=null ? t : (Date.parse(p.createdAt) || Date.now());
+}
 function cycleEffort(key){
   const i = EFFORT_ORDER.indexOf(EFFORT[key] ? key : DEFAULT_EFFORT);
   return EFFORT_ORDER[(i+1) % EFFORT_ORDER.length];
@@ -627,9 +641,13 @@ function projectStats(p){
   const pct = hasPlan ? Math.round(weightDone/weightTotal*100) : (isDone?100:null);
   const countPct = hasPlan ? Math.round(done/total*100) : (isDone?100:null);
 
-  // Schedule: how much of the project's own window has been spent.
+  // Schedule: how much of the project's own window has been spent. The window opens on
+  // startDate when one is set, so a project that sat in the list before work began is not
+  // punished for the wait; otherwise it falls back to when the project was created.
   const nowMs = Date.now();
-  const startMs = Date.parse(p.createdAt) || nowMs;
+  const startMs = projectStartMs(p);
+  const startedFromDate = explicitStartMs(p)!=null;
+  const notStarted = startMs > nowMs;
   const dueMs = p.dueDate ? endOfDayMs(p.dueDate) : null;
   let timePct = null, daysTotal = null, daysLeft = null, daysElapsed = null;
   if(dueMs){
@@ -646,12 +664,13 @@ function projectStats(p){
   const stamps = units.filter(u=>u.done && u.doneAt).map(u=>Date.parse(u.doneAt)).filter(n=>!isNaN(n));
   const lastActivityMs = stamps.length ? Math.max.apply(null, stamps) : null;
   const daysSinceActivity = dayDiff(lastActivityMs!=null?lastActivityMs:startMs, nowMs);
-  const stalled = hasPlan && !isDone && pct<100 && daysSinceActivity>=STALL_DAYS;
+  const stalled = hasPlan && !isDone && !notStarted && pct<100 && daysSinceActivity>=STALL_DAYS;
 
   let health;
   if(isDone || pct===100) health='done';
   else if(!hasPlan) health='noplan';
   else if(overdue) health='overdue';
+  else if(notStarted) health='notstarted';
   else if(timePct==null) health='nodate';
   else if(variance>=HEALTH_AHEAD_MIN) health='ahead';
   else if(variance>=HEALTH_TRACK_MIN) health='ontrack';
@@ -661,7 +680,8 @@ function projectStats(p){
   return {
     units, hasPlan, done, total, weightDone, weightTotal,
     pct, countPct, timePct, variance, overdue, health,
-    daysTotal, daysLeft, daysElapsed, lastActivityMs, daysSinceActivity, stalled
+    daysTotal, daysLeft, daysElapsed, lastActivityMs, daysSinceActivity, stalled,
+    startMs, startedFromDate, notStarted
   };
 }
 
@@ -674,7 +694,7 @@ function projectHistory(p, maxPoints){
   if(!weightTotal) return { points:[], undated:0 };
   const undated = units.filter(u=>u.done && !u.doneAt).length;
   const nowMs = Date.now();
-  const startMs = Math.min(Date.parse(p.createdAt)||nowMs, nowMs);
+  const startMs = Math.min(projectStartMs(p), nowMs);
   const span = Math.max(86400000, nowMs-startMs);
   const n = Math.max(2, Math.min(maxPoints||14, Math.ceil(span/86400000)+1));
   const points = [];
@@ -731,12 +751,13 @@ function portfolioStats(list){
 /* ---------- shared progress UI fragments ---------- */
 function healthChip(st){
   const m = HEALTH_META[st.health];
-  const v = st.variance!=null && st.health!=='done' && st.health!=='noplan'
+  const v = st.variance!=null && st.health!=='done' && st.health!=='noplan' && st.health!=='notstarted'
     ? ` ${st.variance>0?'+':''}${st.variance}pts` : '';
   return `<span class="health-chip ${m.cls}" title="${esc(healthTitle(st))}">${m.label}${v}</span>`;
 }
 function healthTitle(st){
   if(!st.hasPlan) return 'No milestones or tasks yet — this project has no measurable completion.';
+  if(st.notStarted) return 'Start date is still in the future — the schedule clock has not begun.';
   if(st.timePct==null) return 'No due date, so completion cannot be compared against a schedule.';
   return `${st.pct}% of the work done, ${Math.round(st.timePct)}% of the time spent`
        + (st.daysLeft!=null ? ` · ${st.daysLeft<0?Math.abs(st.daysLeft)+'d overdue':st.daysLeft+'d left'}` : '');
@@ -792,7 +813,7 @@ function newItem(partial){
     id: uid(), type:'task', title:'', status:'open',
     category:'Inbox', priority:'medium', dueDate:null, createdAt: new Date().toISOString(),
     completedAt:null, projectId:null, subtasks:[], assignee:null,
-    contactName:null, lastContactDate:null, isStarred:false, xpAwarded:false, effort:DEFAULT_EFFORT
+    contactName:null, lastContactDate:null, isStarred:false, xpAwarded:false, effort:DEFAULT_EFFORT, startDate:null
   }, partial);
   items().push(it);
   return it;
@@ -1020,6 +1041,21 @@ function renderView(){
 }
 
 /* ---------- NOW ---------- */
+/* Today's date on the front page — re-rendered on every render(), and a timer rolls it at midnight. */
+function renderTodayStamp(){
+  const d = new Date();
+  return `<div class="today-stamp">
+    <div class="today-day">${d.toLocaleDateString(undefined,{weekday:'long'})}</div>
+    <div class="today-date">${d.toLocaleDateString(undefined,{day:'numeric',month:'long',year:'numeric'})}</div>
+  </div>`;
+}
+let midnightTimer = null;
+function scheduleMidnightRollover(){
+  if(midnightTimer) clearTimeout(midnightTimer);
+  const next = new Date(); next.setHours(24,0,5,0);   // just after midnight
+  midnightTimer = setTimeout(()=>{ midnightTimer=null; render(); scheduleMidnightRollover(); }, next-new Date());
+}
+
 function renderNowView(){
   fillNowSlots();
   const pins = nowPins().map(byId).filter(Boolean);
@@ -1028,6 +1064,7 @@ function renderNowView(){
     ${renderHabitStrip(true)}
     <div class="view-head">
       <div><div class="view-title">Now</div><div class="view-sub">Your top ${pins.length} focus item${pins.length===1?'':'s'} — nothing else matters right now.</div></div>
+      ${renderTodayStamp()}
     </div>
     <div class="focus-grid">
       ${pins.map((it,i)=>renderFocusCard(it,i+1)).join('') || ''}
@@ -1236,6 +1273,7 @@ function renderProjectCard(p){
       </div>
       <div class="item-actions">
         <button class="icon-btn btn-sm" data-action="toggle-star" data-id="${p.id}" title="Star">⭐</button>
+        <button class="icon-btn btn-sm" data-action="open-editor" data-id="${p.id}" title="Edit project — dates, domain, owner">✎</button>
         <button class="icon-btn btn-sm" data-action="export-project" data-id="${p.id}" title="Export report">⇩</button>
         <button class="icon-btn btn-sm" data-action="toggle-archive" data-id="${p.id}" title="Archive">🗄</button>
         <button class="icon-btn btn-sm btn-danger" data-action="delete" data-id="${p.id}" title="Delete">✕</button>
@@ -1392,7 +1430,7 @@ function areaTaskPct(a){
   return areaItems.length? Math.round(done/areaItems.length*100) : 0;
 }
 function projectPct(p){ const st = projectStats(p); return st.pct==null ? 0 : st.pct; }
-const HEALTH_BAR_COLOR = { done:'#10B981', ahead:'#10B981', ontrack:'#06B6D4', nodate:'#94A3B8', risk:'#F59E0B', behind:'#F43F5E', overdue:'#F43F5E', noplan:'#CBD5E1' };
+const HEALTH_BAR_COLOR = { done:'#10B981', ahead:'#10B981', ontrack:'#06B6D4', nodate:'#94A3B8', notstarted:'#94A3B8', risk:'#F59E0B', behind:'#F43F5E', overdue:'#F43F5E', noplan:'#CBD5E1' };
 /* Chart.js comes from a CDN — render no card at all rather than an empty box when it is unavailable. */
 function chartsAvailable(){ return typeof Chart!=='undefined'; }
 function chartCard(id, height, extraStyle){
@@ -1832,6 +1870,7 @@ function modalNewProject(){
     <div class="field"><label>Title</label><input id="np-title" placeholder="Project name" /></div>
     <div class="field"><label>Life Binder domain</label><select id="np-cat">${areas.map(a=>`<option value="${esc(a.name)}">${esc(a.name)}</option>`).join('')}</select></div>
     <div class="field"><label>Priority</label><select id="np-pri"><option value="low">Low</option><option value="medium" selected>Medium</option><option value="high">High</option></select></div>
+    <div class="field"><label>Start date (optional)</label><input id="np-start" type="date"/><div class="view-sub" style="margin-top:4px">Leave blank to measure the schedule from today. Set it when work begins later.</div></div>
     <div class="field"><label>Due date (optional)</label><input id="np-due" type="date"/></div>
     <div class="field"><label>Assignee (optional)</label><input id="np-assignee" type="text" placeholder="Who's this for?"/></div>
     <div class="field"><label>Milestones (optional, one per line)</label><textarea id="np-milestones" rows="4" placeholder="First milestone…"></textarea></div>
@@ -1931,7 +1970,8 @@ function modalProjectDetail(p){
       <div class="view-sub" style="margin-bottom:16px">
         ${st.done}/${st.total} steps · ${st.weightDone}/${st.weightTotal} effort points · unweighted this would read ${st.countPct}%.
         ${st.lastActivityMs? `Last step closed ${st.daysSinceActivity===0?'today':st.daysSinceActivity+'d ago'}.` : 'No step has been closed yet.'}
-        Created ${fmtHistoryDate(p.createdAt)}.
+        Schedule measured from ${fmtHistoryDate(st.startMs)}${st.startedFromDate?' (start date)':' (created — set a start date if work began later)'}${p.dueDate?` to ${fmtHistoryDate(p.dueDate+'T00:00:00')}`:''}.
+        ${st.notStarted?'<b>Not started yet</b> — the schedule clock begins on the start date.':''}
       </div>
       ${chartsAvailable()? `<div class="section-label">Completion trend</div>
       <div style="height:140px;margin-bottom:6px"><canvas id="chart-project-trend"></canvas></div>` : ''}
@@ -1940,7 +1980,7 @@ function modalProjectDetail(p){
       <div class="view-sub" style="margin-bottom:16px">
         This project has no milestones and no tasks, so it has <b>no measurable completion</b> — it is not 0% done, it is unmeasured.
         Break it into steps to give it a percentage, a schedule check, and a place in the portfolio roll-up.
-        Created ${fmtHistoryDate(p.createdAt)}.
+        Created ${fmtHistoryDate(p.createdAt)}${p.startDate?` · starts ${fmtHistoryDate(p.startDate+'T00:00:00')}`:''}.
       </div>
     `}
     <div class="section-label">Milestones</div>
@@ -1952,6 +1992,7 @@ function modalProjectDetail(p){
       ${children.map(c=>`<li style="font-size:13.5px;padding:4px 0;${c.status==='done'?'text-decoration:line-through;color:var(--c-text-muted)':''}">${c.status==='done'?'☑':'☐'} ${eff(c.effort)} ${esc(c.title)}${c.dueDate?` <span style="color:var(--c-text-muted)">(${fmtDue(c.dueDate)})</span>`:''}${c.assignee?` <span style="color:var(--c-text-muted)">— ${esc(c.assignee)}</span>`:''}</li>`).join('') || '<li class="view-sub">None.</li>'}
     </ul>
     <div class="modal-actions">
+      <button class="btn" data-action="open-editor" data-id="${p.id}">Edit</button>
       <button class="btn" data-action="export-project" data-id="${p.id}">Export report</button>
       <button class="btn btn-primary" data-action="close-modal">Close</button>
     </div>`);
@@ -1963,7 +2004,7 @@ function modalProjectDetail(p){
     const sets = [{ label:'Complete', data:hist.points.map(h=>h.pct), borderColor:'#10B981', backgroundColor:'#10B98133', fill:true, tension:.3, pointRadius:2 }];
     if(st.timePct!=null){
       // Where the calendar said you should have been at each of those sample dates.
-      const startMs = Date.parse(p.createdAt)||Date.now();
+      const startMs = projectStartMs(p);
       const dueMs = endOfDayMs(p.dueDate);
       sets.push({ label:'Schedule', data:hist.points.map(h=>Math.round(clampPct((h.ms-startMs)/Math.max(1,(dueMs-startMs))*100))),
         borderColor:'#64748B', borderDash:[5,4], fill:false, tension:0, pointRadius:0 });
@@ -2060,11 +2101,12 @@ function modalEditItem(item){
   const areaNames = ['Inbox', ...state.state.lifeAreas.map(a=>a.name)];
   const projectOptions = projects().filter(p=>p.id!==item.id);
   openModal(`
-    <h3>Edit item</h3>
+    <h3>Edit ${item.type==='project'?'project':'item'}</h3>
     <div class="field"><label>Title</label><input id="ed-title" value="${esc(item.title)}"/></div>
     <div class="field"><label>Domain</label><select id="ed-cat">${areaNames.map(a=>`<option value="${esc(a)}" ${a===item.category?'selected':''}>${esc(a)}</option>`).join('')}</select></div>
-    <div class="field"><label>Project (optional)</label><select id="ed-project"><option value="">None — standalone</option>${projectOptions.map(p=>`<option value="${esc(p.id)}" ${p.id===item.projectId?'selected':''}>${esc(p.title)}</option>`).join('')}</select></div>
+    ${item.type==='project'? '' : `<div class="field"><label>Project (optional)</label><select id="ed-project"><option value="">None — standalone</option>${projectOptions.map(p=>`<option value="${esc(p.id)}" ${p.id===item.projectId?'selected':''}>${esc(p.title)}</option>`).join('')}</select></div>`}
     <div class="field"><label>Priority</label><select id="ed-pri">${['low','medium','high'].map(p=>`<option value="${p}" ${p===item.priority?'selected':''}>${p}</option>`).join('')}</select></div>
+    ${item.type==='project'? `<div class="field"><label>Start date</label><input id="ed-start" type="date" value="${item.startDate||''}"/><div class="view-sub" style="margin-top:4px">When work actually began. Blank measures the schedule from ${fmtHistoryDate(item.createdAt)}, when the project was created.</div></div>`:''}
     <div class="field"><label>Due date</label><input id="ed-due" type="date" value="${item.dueDate||''}"/></div>
     <div class="field"><label>Assignee</label><input id="ed-assignee" type="text" placeholder="Who's this for? (optional)" value="${esc(item.assignee||'')}"/></div>
     <div class="modal-actions">
@@ -2101,6 +2143,7 @@ function exportProjectReport(p){
       <tr><td><b>Complete (effort-weighted)</b></td><td>${st.pct}%</td></tr>
       <tr><td>Unweighted step count</td><td>${st.countPct}% (${st.done} of ${st.total} steps)</td></tr>
       <tr><td>Effort closed</td><td>${st.weightDone} of ${st.weightTotal} points</td></tr>
+      <tr><td>Schedule window</td><td>${new Date(st.startMs).toLocaleDateString()}${st.startedFromDate?' (start date)':' (project created)'}${p.dueDate?' → '+p.dueDate:' → no due date'}</td></tr>
       <tr><td>Schedule spent</td><td>${st.timePct==null?'No due date set':Math.round(st.timePct)+'% of the window'}</td></tr>
       <tr><td>Schedule variance</td><td>${st.variance==null?'—':(st.variance>0?'+':'')+st.variance+' pts (' + HEALTH_META[st.health].label + ')'}</td></tr>
       <tr><td>Time remaining</td><td>${st.daysLeft==null?'—':st.daysLeft<0?Math.abs(st.daysLeft)+' days overdue':st.daysLeft+' days left'}</td></tr>
@@ -2108,7 +2151,7 @@ function exportProjectReport(p){
     </table>`
   : `<h2>At a glance</h2><p><b>No measurable completion.</b> This project has no milestones and no tasks, so it has no percentage — it is unmeasured rather than 0% done, and it is excluded from portfolio roll-ups.</p>`;
   const html = `<h1>${esc(p.title)}</h1>
-    <p class="muted">Domain: ${esc(p.category)} &nbsp;·&nbsp; Priority: ${esc(p.priority)} &nbsp;·&nbsp; Status: ${esc(p.status)}${p.assignee?` &nbsp;·&nbsp; Owner: ${esc(p.assignee)}`:''}${p.dueDate?` &nbsp;·&nbsp; Due ${esc(p.dueDate)}`:''}</p>
+    <p class="muted">Domain: ${esc(p.category)} &nbsp;·&nbsp; Priority: ${esc(p.priority)} &nbsp;·&nbsp; Status: ${esc(p.status)}${p.assignee?` &nbsp;·&nbsp; Owner: ${esc(p.assignee)}`:''}${p.startDate?` &nbsp;·&nbsp; Start ${esc(p.startDate)}`:''}${p.dueDate?` &nbsp;·&nbsp; Due ${esc(p.dueDate)}`:''}</p>
     <p class="muted">Generated ${new Date().toLocaleDateString(undefined,{year:'numeric',month:'long',day:'numeric'})}</p>
     ${summary}
     <h2>Milestones</h2><ul>${milestones.map(line).join('') || '<li class="muted">None</li>'}</ul>
@@ -2149,7 +2192,7 @@ function exportPortfolioReport(){
         <td>${HEALTH_META[r.st.health].label}</td>
       </tr>`).join('')}
     </table>
-    <p class="muted">Effort sizes: S=1, M=2, L=3, XL=5. Variance is completion % minus the % of each project's time window already spent; negative means behind the calendar. Projects with no milestones or tasks have no percentage and are excluded from the weighted figures.</p>`;
+    <p class="muted">Effort sizes: S=1, M=2, L=3, XL=5. Variance is completion % minus the % of each project's time window already spent; negative means behind the calendar. A project's window runs from its start date (or, if unset, its creation date) to its due date. Projects with no milestones or tasks have no percentage and are excluded from the weighted figures.</p>`;
   downloadWordDoc(`project-portfolio-${todayISO()}.doc`, 'Project portfolio', html);
   pushToast('Portfolio report downloaded');
 }
@@ -2248,11 +2291,15 @@ function handleAction(action, el){
     case 'open-editor': if(item) modalEditItem(item); break;
     case 'confirm-edit': {
       if(item){
+        const edStart = qs('#ed-start') ? (qs('#ed-start').value || null) : item.startDate;
+        const edDue = qs('#ed-due').value || null;
+        if(edStart && edDue && edStart > edDue){ pushToast('Start date must be on or before the due date'); break; }
         item.title = qs('#ed-title').value.trim()||item.title;
         item.category = qs('#ed-cat').value;
-        item.projectId = qs('#ed-project').value || null;
+        if(qs('#ed-project')) item.projectId = qs('#ed-project').value || null;
         item.priority = qs('#ed-pri').value;
-        item.dueDate = qs('#ed-due').value || null;
+        if(qs('#ed-start')) item.startDate = edStart;
+        item.dueDate = edDue;
         item.assignee = qs('#ed-assignee').value.trim() || null;
         closeModal(); persist();
       }
@@ -2304,12 +2351,15 @@ function handleAction(action, el){
     case 'new-project': modalNewProject(); break;
     case 'confirm-new-project': {
       const title = qs('#np-title').value.trim();
+      const npStart = qs('#np-start').value || null, npDue = qs('#np-due').value || null;
+      if(npStart && npDue && npStart > npDue){ pushToast('Start date must be on or before the due date'); break; }
       if(title){
         const milestones = qs('#np-milestones').value.split('\n').map(x=>x.trim()).filter(Boolean)
           .map(t=>({id:uid(), title:t, done:false, xpAwarded:false, effort:DEFAULT_EFFORT, doneAt:null}));
         newItem({
           title, type:'project', category:qs('#np-cat').value, priority:qs('#np-pri').value,
-          dueDate: qs('#np-due').value || null,
+          startDate: npStart,
+          dueDate: npDue,
           assignee: qs('#np-assignee').value.trim() || null,
           subtasks: milestones
         });
@@ -2428,6 +2478,7 @@ function boot(){
   state = loadRoot();
   inactiveProjects = loadInactive();
   render();
+  scheduleMidnightRollover();
 
   if(typeof db==='undefined'){ pushToast('⚠️ Could not reach cloud — using local data'); migrateAreasIfNeeded(); return; }
 
