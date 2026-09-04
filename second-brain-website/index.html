@@ -210,6 +210,18 @@
       .sub-row{display:flex;align-items:center;gap:10px;padding:6px 0;font-size:13.5px}
       .sub-add{display:flex;gap:8px;margin-top:8px}
       .sub-add input{flex:1;padding:7px 10px;border-radius:8px;border:1px solid var(--c-border);background:var(--c-surface);font-size:13px}
+      .row-tools{display:inline-flex;gap:2px;flex-shrink:0}
+      .row-tools .icon-btn{padding:2px 5px;font-size:12px;line-height:1.1}
+      .icon-btn[disabled]{opacity:.25;cursor:not-allowed}
+      .search-box{flex:1;min-width:180px;padding:8px 12px;border-radius:10px;border:1px solid var(--c-border);background:var(--c-surface);font-size:13.5px;color:var(--c-text)}
+      .search-box:focus{outline:2px solid var(--c-info-dim);border-color:var(--c-info)}
+      .filter-bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:14px}
+      .habit-row.inactive{opacity:.5}
+      .week-pager{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--c-text-muted)}
+      .dom-row{display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--c-border);flex-wrap:wrap}
+      .dom-row:last-child{border-bottom:none}
+      .dom-row .dom-name{flex:1;min-width:140px;font-size:13.5px;font-weight:600}
+      .dom-row .dom-count{font-family:'JetBrains Mono',monospace;font-size:11.5px;color:var(--c-text-muted);white-space:nowrap}
       .list-num{font-family:'JetBrains Mono',monospace;font-size:11.5px;font-weight:600;color:var(--c-text-muted);font-variant-numeric:tabular-nums;min-width:22px;text-align:right;flex-shrink:0;padding-top:2px}
       .import-box{width:100%;min-height:130px;padding:11px 13px;border-radius:10px;border:1px solid var(--c-border);background:var(--c-surface-alt);color:var(--c-text);font-family:'JetBrains Mono',monospace;font-size:11.5px;line-height:1.55;resize:vertical}
       .import-box:focus{outline:2px solid var(--c-info-dim);border-color:var(--c-info)}
@@ -432,6 +444,7 @@ function loadRoot(){
   st.habits = Array.isArray(st.habits) ? st.habits : [];
   st.habits.forEach(h=>{
     if(!h.id) h.id=uid(); if(!h.log) h.log={}; if(!h.emoji) h.emoji='✅'; if(h.category===undefined) h.category=null;
+    if(typeof h.active!=='boolean') h.active = true;   // retired habits stay for their history
     if(!h.frequency || !h.frequency.type) h.frequency={type:'daily'};
     if(h.frequency.type==='days' && !Array.isArray(h.frequency.days)) h.frequency.days=[0,1,2,3,4,5,6];
     if(h.frequency.type==='weekly' && !h.frequency.target) h.frequency.target=3;
@@ -578,6 +591,11 @@ const ui = {
   historyWeekOffset: 0,       // weeks back from current, for the Reports habit-history pager
   reportsTab: 'areas',        // areas | projects | habits | timeline
   projectHealthFilter: 'all', // all | offtrack | stalled | noplan — Reports > Projects
+  projectSearch: '',          // free-text filter on the Projects tab
+  reportsSearch: '',          // free-text filter on Reports > Projects
+  inboxSearch: '',            // free-text filter on the Inbox
+  habitWeekOffset: 0,         // weeks back on the Habits tab, so a missed weekend is reachable
+  showInactiveHabits: false,  // reveal retired habits
   importText: '',             // Settings > Import — raw pasted JSON
   importPlan: null,           // parsed preview, or {error}
 };
@@ -596,6 +614,42 @@ function nowPins(){ return state.state.settings.nowPins; }
 /* Optional 1., 2., 3. prefixes so a list can be talked about by position. */
 function numbersOn(){ return !!state.state.settings.numberLists; }
 function numLabel(i){ return numbersOn() ? `<span class="list-num">${i+1}.</span>` : ''; }
+
+/* Up/down controls. Buttons rather than drag: they work identically on a
+   phone and a desktop, and never fight the list's own scrolling. */
+function moveTools(action, id, i, len, extra){
+  return `<span class="row-tools">
+    <button class="icon-btn btn-sm" data-action="${action}" data-dir="-1" data-i="${i}" ${extra||''} title="Move up" ${i===0?'disabled':''}>↑</button>
+    <button class="icon-btn btn-sm" data-action="${action}" data-dir="1" data-i="${i}" ${extra||''} title="Move down" ${i>=len-1?'disabled':''}>↓</button>
+  </span>`;
+}
+/* Move within an array, clamped. Returns true when something actually moved. */
+function moveInArray(arr, from, dir){
+  const to = from + dir;
+  if(from<0 || from>=arr.length || to<0 || to>=arr.length) return false;
+  const [x] = arr.splice(from,1);
+  arr.splice(to,0,x);
+  return true;
+}
+/* Reorder the shared items array so `view` (a filtered slice) takes a new order. */
+function reorderItemsBy(view, from, dir){
+  const to = from + dir;
+  if(to<0 || to>=view.length) return false;
+  const all = items();
+  const a = all.indexOf(view[from]), b = all.indexOf(view[to]);
+  if(a<0 || b<0) return false;
+  all[a] = view[to]; all[b] = view[from];
+  return true;
+}
+/* Escape a value for use inside a [attr="..."] selector. */
+function cssEscape(v){ return String(v==null?'':v).replace(/["\\]/g, '\\$&'); }
+function matchesSearch(text, q){
+  if(!q) return true;
+  return String(text||'').toLowerCase().indexOf(q.toLowerCase()) >= 0;
+}
+function searchBox(id, value, placeholder){
+  return `<input class="search-box" id="${id}" type="search" value="${esc(value||'')}" placeholder="${esc(placeholder)}" data-action-input="${id}-changed" />`;
+}
 
 /* =========================================================
    Project analytics — one source of truth for every % in the app.
@@ -908,7 +962,7 @@ function isHabitRequiredOn(habit, dateISO){
   return true; // daily
 }
 function maybeAwardHabitBonus(dateISO){
-  const habits = state.state.habits.filter(h=>isHabitRequiredOn(h, dateISO));
+  const habits = state.state.habits.filter(h=>h.active!==false && isHabitRequiredOn(h, dateISO));
   if(!habits.length) return;
   const allDone = habits.every(h=>h.log[dateISO]);
   const bonusList = state.state.gamification.habitBonusDates;
@@ -961,9 +1015,19 @@ function render(){
   document.documentElement.dataset.theme = state.state.settings.themeMode;
   document.querySelector('meta[name="theme-color"]').setAttribute('content', state.state.settings.themeMode==='dark' ? '#0F172A':'#F8FAFC');
   const app = qs('#app');
+  const focusId = document.activeElement && document.activeElement.id;
+  const caret = focusId && typeof document.activeElement.selectionStart==='number' ? document.activeElement.selectionStart : null;
   app.innerHTML = renderSidebar() + renderMain();
   wireGlobal();
   renderCharts();
+  // Typing in a filter box re-renders the list underneath it — keep the caret.
+  if(focusId){
+    const back = document.getElementById(focusId);
+    if(back && back.focus){
+      back.focus();
+      if(caret!=null && back.setSelectionRange){ try{ back.setSelectionRange(caret, caret); }catch(e){} }
+    }
+  }
 }
 
 function renderSidebar(){
@@ -1129,7 +1193,10 @@ function checkSvg(){ return `<svg width="12" height="12" viewBox="0 0 24 24" fil
 /* ---------- HABIT STRIP (shared) ---------- */
 function renderHabitStrip(compact, weekOffset){
   weekOffset = weekOffset||0;
-  const habits = state.state.habits;
+  const all = state.state.habits;
+  // The Now strip only ever shows live habits; the Habits tab can reveal retired ones.
+  const habits = compact ? all.filter(h=>h.active!==false)
+                         : (ui.showInactiveHabits ? all : all.filter(h=>h.active!==false));
   const week = Array.from({length:7}).map((_,i)=>fmtISO(addDays(startOfWeek(addDays(new Date(),-7*weekOffset)),i)));
   const today = todayISO();
   if(!habits.length && compact){
@@ -1140,14 +1207,20 @@ function renderHabitStrip(compact, weekOffset){
     </div>`;
   }
   if(!habits.length) return '';
+  const wkStart = startOfWeek(addDays(new Date(), -7*weekOffset));
   return `<div class="habit-strip">
     <div class="habit-strip-head">
-      <span class="section-label" style="margin:0">Daily habits</span>
+      <span class="section-label" style="margin:0">${compact?'Daily habits':'Habits'}</span>
+      ${compact?'':`<div class="week-pager">
+        <button class="icon-btn btn-sm" data-action="habit-week" data-dir="1" title="Previous week">‹</button>
+        <span>${weekOffset===0?'This week':fmtWeekLabel(weekOffset)}</span>
+        <button class="icon-btn btn-sm" data-action="habit-week" data-dir="-1" title="Next week" ${weekOffset===0?'disabled':''}>›</button>
+      </div>`}
       <button class="btn btn-sm" data-action="add-habit">+ Add habit</button>
     </div>
     ${habits.map(h=>`
-      <div class="habit-row">
-        <div class="habit-name" title="${esc(h.name)}">${h.emoji} ${esc(h.name)}${h.frequency&&h.frequency.type==='weekly'?` <span style="color:var(--c-text-muted);font-weight:500">(${h.frequency.target}x/wk)</span>`:''}</div>
+      <div class="habit-row ${h.active===false?'inactive':''}">
+        <div class="habit-name" title="${esc(h.name)}">${h.emoji} ${esc(h.name)}${h.active===false?' <span class="chip" style="padding:1px 6px">retired</span>':''}${h.frequency&&h.frequency.type==='weekly'?` <span style="color:var(--c-text-muted);font-weight:500">(${h.frequency.target}x/wk)</span>`:''}</div>
         <div class="habit-days">
           ${week.map((d,i)=>{
             const offSched = h.frequency && h.frequency.type==='days' && !(h.frequency.days||[]).includes(i);
@@ -1155,13 +1228,14 @@ function renderHabitStrip(compact, weekOffset){
             <div class="day-cell">
               <div class="day-lbl">${DAY_LABELS[i]}</div>
               <button class="day-dot ${h.log[d]?'done':''} ${d===today?'today':''} ${d>today?'future':''} ${offSched?'offsched':''}"
-                data-action="toggle-habit" data-id="${h.id}" data-date="${d}" ${d>today?'disabled':''} ${offSched?'title="Not scheduled"':''}>
+                data-action="toggle-habit" data-id="${h.id}" data-date="${d}" ${d>today?'disabled':''}
+                title="${d>today?'Still in the future — use ‹ to log an earlier week':(offSched?'Not scheduled on this day':esc(d))}">
                 ${h.log[d]?'✓':''}
               </button>
             </div>`;}).join('')}
         </div>
         <div class="habit-streak">🔥 ${fmtHabitStreak(h)}</div>
-        ${compact?'':`<button class="icon-btn btn-sm" data-action="edit-habit" data-id="${h.id}" title="Edit habit">✎</button><button class="icon-btn btn-sm" data-action="delete-habit" data-id="${h.id}" title="Delete habit">🗑</button>`}
+        ${compact?'':`${moveTools('move-habit', h.id, all.indexOf(h), all.length)}<button class="icon-btn btn-sm" data-action="toggle-habit-active" data-id="${h.id}" title="${h.active===false?'Reactivate this habit':'Retire this habit — keeps its history'}">${h.active===false?'▶':'⏸'}</button><button class="icon-btn btn-sm" data-action="edit-habit" data-id="${h.id}" title="Edit habit">✎</button><button class="icon-btn btn-sm btn-danger" data-action="delete-habit" data-id="${h.id}" title="Delete habit and its history">🗑</button>`}
       </div>`).join('')}
   </div>`;
 }
@@ -1170,7 +1244,8 @@ function renderHabitStrip(compact, weekOffset){
 function renderInboxView(){
   const all = inboxItems();
   const assignees = Array.from(new Set(all.filter(i=>i.assignee).map(i=>i.assignee))).sort();
-  const list = ui.inboxAssigneeFilter==='all' ? all : all.filter(i=>i.assignee===ui.inboxAssigneeFilter);
+  let list = ui.inboxAssigneeFilter==='all' ? all : all.filter(i=>i.assignee===ui.inboxAssigneeFilter);
+  if(ui.inboxSearch) list = list.filter(i=>matchesSearch(i.title, ui.inboxSearch) || matchesSearch(i.assignee, ui.inboxSearch));
   return `<div class="view">
     <div class="view-head">
       <div><div class="view-title">Inbox</div><div class="view-sub">Raw thoughts &amp; single-step tasks. Decide fast, don't organize here.</div></div>
@@ -1180,14 +1255,20 @@ function renderInboxView(){
       <input id="capture-input" type="text" placeholder="Capture a thought or task… (Enter to add)" data-action-enter="capture-add" />
       <button class="btn btn-primary" data-action="capture-add">Add</button>
     </div>
+    <div class="filter-bar">
+      ${searchBox('inbox-search', ui.inboxSearch, 'Search the inbox…')}
+      ${ui.inboxSearch? `<button class="btn btn-sm" data-action="clear-inbox-search">Clear</button>`:''}
+    </div>
     ${assignees.length? `<div class="chip-row">
       <button class="chip ${ui.inboxAssigneeFilter==='all'?'on':''}" data-action="filter-assignee" data-assignee="all">All</button>
       ${assignees.map(a=>`<button class="chip ${ui.inboxAssigneeFilter===a?'on':''}" data-action="filter-assignee" data-assignee="${esc(a)}">👤 ${esc(a)}</button>`).join('')}
     </div>` : ''}
-    ${list.length? list.map((it,i)=>renderInboxRow(it,i)).join('') : (all.length? `<div class="empty">No items assigned to ${esc(ui.inboxAssigneeFilter)}.</div>` : `<div class="empty">Inbox zero 🎉 — nothing waiting to be triaged.</div>`)}
+    ${(inboxViewLen = list.length, '')}
+    ${list.length? list.map((it,i)=>renderInboxRow(it,i)).join('') : (all.length? `<div class="empty">${ui.inboxSearch? 'Nothing matches that search.' : `No items assigned to ${esc(ui.inboxAssigneeFilter)}.`}</div>` : `<div class="empty">Inbox zero 🎉 — nothing waiting to be triaged.</div>`)}
   </div>`;
 }
 
+let inboxViewLen = 0;
 function renderInboxRow(it, i){
   const pinned = nowPins().indexOf(it.id)>=0;
   return `<div class="item-row">
@@ -1198,6 +1279,7 @@ function renderInboxRow(it, i){
       <div class="item-meta"><span class="dot pri-dot pri-${it.priority}"></span><span class="pri-${it.priority}">${it.priority}</span>${it.assignee?`<span class="chip">👤 ${esc(it.assignee)}</span>`:''}</div>
     </div>
     <div class="item-actions">
+      ${moveTools('move-inbox', it.id, i, inboxViewLen)}
       <button class="icon-btn btn-sm" data-action="toggle-pin" data-id="${it.id}" title="${pinned?'Unpin from Now':'Pin to Now / Today'}" style="${pinned?'color:var(--c-focus)':''}">📌</button>
       <button class="btn btn-sm" data-action="convert-project" data-id="${it.id}" title="Convert to a Project">→ Project</button>
       <button class="btn btn-sm btn-ghost" data-action="open-editor" data-id="${it.id}">Edit</button>
@@ -1240,6 +1322,10 @@ function renderProjectsView(){
   let list = projects();
   if(!ui.showArchived) list = list.filter(p=>inactiveProjects.indexOf(p.id)===-1);
   if(ui.projectFilter!=='all') list = list.filter(p=>p.category===ui.projectFilter);
+  if(ui.projectSearch) list = list.filter(p=>matchesSearch(p.title, ui.projectSearch)
+    || matchesSearch(p.category, ui.projectSearch)
+    || matchesSearch(p.assignee, ui.projectSearch)
+    || (p.subtasks||[]).some(st=>matchesSearch(st.title, ui.projectSearch)));
   return `<div class="view">
     <div class="view-head">
       <div><div class="view-title">Projects</div><div class="view-sub">Grouped by Life Binder domain — everything with more than one step lives here.</div></div>
@@ -1250,10 +1336,21 @@ function renderProjectsView(){
       ${areas.map(a=>`<button class="chip ${ui.projectFilter===a.name?'on':''}" data-action="filter-project" data-cat="${esc(a.name)}">${esc(a.name)}</button>`).join('')}
       <button class="chip ${ui.showArchived?'on':''}" data-action="toggle-archived" style="margin-left:auto">${ui.showArchived?'Hide':'Show'} archived</button>
     </div>
+    <div class="filter-bar">
+      ${searchBox('project-search', ui.projectSearch, 'Search projects, domains, owners, milestones…')}
+      ${ui.projectSearch? `<button class="btn btn-sm" data-action="clear-project-search">Clear</button>`:''}
+      <button class="btn btn-sm" data-action="manage-domains">Manage domains</button>
+    </div>
     ${renderProjectsSummary(list)}
-    ${list.length? list.map((p,i)=>renderProjectCard(p,i)).join('') : `<div class="empty">No projects in this domain yet.</div>`}
+    ${(projectViewLen = list.length, '')}
+    ${list.length? list.map((p,i)=>renderProjectCard(p,i)).join('') : `<div class="empty">${ui.projectSearch? 'No projects match that search.' : 'No projects in this domain yet.'}</div>`}
   </div>`;
 }
+
+/* How many projects the Projects tab is currently showing — reorder controls
+   need it to know which row is last. */
+let projectViewLen = 0;
+function projectViewCount(){ return projectViewLen; }
 
 /* One-line health read on whatever slice of projects is on screen. */
 function renderProjectsSummary(list){
@@ -1290,6 +1387,7 @@ function renderProjectCard(p, i){
         ${progressBar(st)}
       </div>
       <div class="item-actions">
+        ${moveTools('move-project', p.id, i, projectViewCount())}
         <button class="icon-btn btn-sm" data-action="toggle-star" data-id="${p.id}" title="Star">⭐</button>
         <button class="icon-btn btn-sm" data-action="open-editor" data-id="${p.id}" title="Edit project — dates, domain, owner">✎</button>
         <button class="icon-btn btn-sm" data-action="export-project" data-id="${p.id}" title="Export report">⇩</button>
@@ -1310,7 +1408,10 @@ function renderProjectBody(p, children){
           ${numLabel(si)}
           <button class="check ${s.done?'done':''}" style="width:17px;height:17px" data-action="toggle-subtask" data-id="${p.id}" data-sub="${s.id}">${checkSvg()}</button>
           ${effortChip(s.effort, `data-id="${p.id}" data-sub="${s.id}"`)}
-          <span style="${s.done?'text-decoration:line-through;color:var(--c-text-muted)':''}">${esc(s.title)}</span>
+          <span style="flex:1;min-width:0;${s.done?'text-decoration:line-through;color:var(--c-text-muted)':''}">${esc(s.title)}</span>
+          ${moveTools('move-subtask', p.id, si, p.subtasks.length, `data-id="${p.id}"`)}
+          <button class="icon-btn btn-sm" data-action="rename-subtask" data-id="${p.id}" data-sub="${s.id}" title="Rename milestone">✎</button>
+          <button class="icon-btn btn-sm btn-danger" data-action="delete-subtask" data-id="${p.id}" data-sub="${s.id}" title="Delete milestone">✕</button>
         </div>`).join('') || `<div class="view-sub">No milestones yet.</div>`}
       <div class="sub-add">
         <input type="text" placeholder="Add a milestone…" data-role="new-sub" data-id="${p.id}" data-action-enter="add-subtask" />
@@ -1328,6 +1429,8 @@ function renderProjectBody(p, children){
           ${renderMeta(c)}
         </div>
         <div class="item-actions">
+          ${moveTools('move-child', p.id, ci, children.length, `data-id="${p.id}"`)}
+          <button class="icon-btn btn-sm" data-action="open-editor" data-id="${c.id}" title="Edit task">✎</button>
           <button class="icon-btn btn-sm" data-action="toggle-star" data-id="${c.id}" title="Star">${c.isStarred?'⭐':'☆'}</button>
           <button class="icon-btn btn-sm" data-action="toggle-pin" data-id="${c.id}" title="Pin to Now">📌</button>
           <button class="icon-btn btn-sm btn-danger" data-action="delete" data-id="${c.id}">✕</button>
@@ -1375,8 +1478,11 @@ function renderHabitsView(){
     <div class="view-head">
       <div><div class="view-title">Habits</div><div class="view-sub">One tap per day. Small and consistent beats big and abandoned.</div></div>
     </div>
-    ${renderHabitStrip(false)}
+    ${(()=>{ const retired = state.state.habits.filter(h=>h.active===false).length;
+      return retired? `<div class="filter-bar"><button class="chip ${ui.showInactiveHabits?'on':''}" data-action="toggle-inactive-habits">${ui.showInactiveHabits?'Hide':'Show'} retired (${retired})</button></div>` : ''; })()}
+    ${renderHabitStrip(false, ui.habitWeekOffset)}
     ${!state.state.habits.length? `<div class="empty">No habits yet. <button class="btn btn-primary btn-sm" data-action="add-habit" style="margin-top:10px">+ Add your first habit</button></div>`:''}
+    <div class="view-sub" style="margin-top:12px">Future days can't be ticked. Use ‹ to step back a week and log a day you missed.</div>
   </div>`;
 }
 
@@ -1568,7 +1674,7 @@ function renderReportsView(){
   return `<div class="view">
     <div class="view-head">
       <div><div class="view-title">Reports</div><div class="view-sub">Progress by life area, project, and habit — plus a full completed-tasks timeline.</div></div>
-      ${tab==='projects'? `<button class="btn" data-action="export-portfolio">⇩ Export portfolio</button>` : ''}
+      <button class="btn" data-action="export-report">⇩ Export ${tab==='projects'?'portfolio':tab==='areas'?'life areas':tab==='habits'?'habits':'completed work'}</button>
     </div>
     <div class="chip-row">
       <button class="chip ${tab==='areas'?'on':''}" data-action="reports-tab" data-tab="areas">Life Areas</button>
@@ -1594,10 +1700,11 @@ function reportProjectList(){ return projects().filter(p=>inactiveProjects.index
 function reportProjectRows(){
   const rows = reportProjectList().map(p=>({ p, st:projectStats(p) }));
   const f = ui.projectHealthFilter;
-  const kept = f==='offtrack' ? rows.filter(r=>r.st.health==='behind'||r.st.health==='risk'||r.st.health==='overdue')
+  let kept = f==='offtrack' ? rows.filter(r=>r.st.health==='behind'||r.st.health==='risk'||r.st.health==='overdue')
              : f==='stalled'  ? rows.filter(r=>r.st.stalled)
              : f==='noplan'   ? rows.filter(r=>!r.st.hasPlan)
              : rows;
+  if(ui.reportsSearch) kept = kept.filter(r=>matchesSearch(r.p.title, ui.reportsSearch) || matchesSearch(r.p.category, ui.reportsSearch));
   return kept.sort((a,b)=>HEALTH_ORDER.indexOf(a.st.health)-HEALTH_ORDER.indexOf(b.st.health)
                         || (b.st.weightTotal-a.st.weightTotal));
 }
@@ -1650,6 +1757,10 @@ function renderReportsProjectsView(){
       ${chip('offtrack','Off track',port.offTrack)}
       ${chip('stalled','Stalled',port.stalledCount)}
       ${chip('noplan','No plan',port.noPlanCount)}
+    </div>
+    <div class="filter-bar">
+      ${searchBox('reports-search', ui.reportsSearch, 'Search projects and domains…')}
+      ${ui.reportsSearch? `<button class="btn btn-sm" data-action="clear-reports-search">Clear</button>`:''}
     </div>
     ${rows.filter(r=>r.st.hasPlan).length? chartCard('chart-projects', Math.max(140,rows.filter(r=>r.st.hasPlan).length*34)) : ''}
     <div class="view-sub" style="margin-bottom:12px">Bar = work done. Grey tick = how much of the project's time window has been spent.</div>
@@ -1983,6 +2094,77 @@ function modalAreaDetail(area){
     </div>`);
 }
 
+/* Rename, merge or delete life-area domains without leaving the Projects tab.
+   Merge is the one that matters when domains have drifted into near-duplicates. */
+function areaUsage(name){
+  return {
+    items: items().filter(i=>i.category===name).length,
+    projects: projects().filter(p=>p.category===name).length,
+    habits: state.state.habits.filter(h=>h.category===name).length
+  };
+}
+function modalManageDomains(){
+  const areas = state.state.lifeAreas;
+  openModal(`
+    <h3>Manage domains</h3>
+    <div class="view-sub" style="margin-bottom:12px">Rename a domain and everything filed under it follows. Merge moves its items into another domain and removes it. Deleting sends its items back to the Inbox.</div>
+    ${areas.length? areas.map(a=>{
+      const u = areaUsage(a.name);
+      const others = areas.filter(x=>x.name!==a.name);
+      return `<div class="dom-row">
+        <span class="dom-name">${esc(a.name)}</span>
+        <span class="dom-count">${u.projects} proj · ${u.items} items · ${u.habits} habits</span>
+        <button class="btn btn-sm" data-action="rename-domain" data-area="${esc(a.name)}">Rename</button>
+        ${others.length? `<select data-role="merge-target" data-area="${esc(a.name)}" style="font-size:12px;padding:4px 6px">
+          <option value="">Merge into…</option>
+          ${others.map(o=>`<option value="${esc(o.name)}">${esc(o.name)}</option>`).join('')}
+        </select>
+        <button class="btn btn-sm" data-action="merge-domain" data-area="${esc(a.name)}">Merge</button>`:''}
+        <button class="btn btn-sm btn-danger" data-action="delete-domain" data-area="${esc(a.name)}">Delete</button>
+      </div>`;
+    }).join('') : '<div class="view-sub">No domains yet.</div>'}
+    <div class="sub-add" style="margin-top:14px">
+      <input type="text" id="new-domain" placeholder="Add a domain…" data-action-enter="add-domain"/>
+      <button class="btn btn-sm" data-action="add-domain">Add</button>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-primary" data-action="close-modal">Done</button>
+    </div>`);
+}
+function renameLifeArea(oldName, newName){
+  newName = (newName||'').trim();
+  if(!newName || newName===oldName) return false;
+  if(state.state.lifeAreas.some(a=>a.name===newName)) return false;
+  const a = state.state.lifeAreas.find(x=>x.name===oldName);
+  if(!a) return false;
+  a.name = newName;
+  items().forEach(i=>{ if(i.category===oldName) i.category = newName; });
+  state.state.habits.forEach(h=>{ if(h.category===oldName) h.category = newName; });
+  if(ui.projectFilter===oldName) ui.projectFilter = newName;
+  return true;
+}
+function mergeLifeArea(fromName, intoName){
+  if(!fromName || !intoName || fromName===intoName) return false;
+  if(!state.state.lifeAreas.some(a=>a.name===intoName)) return false;
+  items().forEach(i=>{ if(i.category===fromName) i.category = intoName; });
+  state.state.habits.forEach(h=>{ if(h.category===fromName) h.category = intoName; });
+  const idx = state.state.lifeAreas.findIndex(a=>a.name===fromName);
+  if(idx>=0) state.state.lifeAreas.splice(idx,1);
+  if(ui.projectFilter===fromName) ui.projectFilter = intoName;
+  return true;
+}
+
+function modalRenameSubtask(p, sub){
+  openModal(`
+    <h3>Rename milestone</h3>
+    <div class="field"><label>Title</label><input id="ms-title" value="${esc(sub.title)}" data-action-enter="confirm-rename-subtask" data-id="${p.id}" data-sub="${sub.id}"/></div>
+    <div class="modal-actions">
+      <button class="btn" data-action="close-modal">Cancel</button>
+      <button class="btn btn-primary" data-action="confirm-rename-subtask" data-id="${p.id}" data-sub="${sub.id}">Save</button>
+    </div>`);
+  setTimeout(()=>{ const el=qs('#ms-title'); if(el){ el.focus(); el.select(); } },0);
+}
+
 function modalProjectDetail(p){
   const children = tasksOf(p.id);
   const st = projectStats(p);
@@ -2259,7 +2441,7 @@ function applyImport(plan){
     if(p.archived && inactiveProjects.indexOf(proj.id)<0){ inactiveProjects.push(proj.id); archivedAny = true; }
   });
   plan.habits.forEach(h=>{
-    state.state.habits.push({ id:uid(), name:h.name, emoji:h.emoji, category:h.category, log:{}, frequency:h.frequency });
+    state.state.habits.push({ id:uid(), name:h.name, emoji:h.emoji, category:h.category, log:{}, frequency:h.frequency, active:true });
   });
   if(archivedAny) saveInactive();
   persist();
@@ -2373,6 +2555,74 @@ function exportPortfolioReport(){
   pushToast('Portfolio report downloaded');
 }
 
+function exportAreasReport(){
+  const areas = state.state.lifeAreas;
+  const rows = areas.map(a=>{
+    const areaItems = items().filter(i=>i.category===a.name && (i.type==='task'||i.type==='project'));
+    const done = areaItems.filter(i=>i.status==='done').length;
+    const port = portfolioStats(reportProjectList().filter(p=>p.category===a.name));
+    const hb = state.state.habits.filter(h=>h.category===a.name && h.active!==false);
+    return { name:a.name, done, total:areaItems.length,
+      taskPct: areaItems.length? Math.round(done/areaItems.length*100) : null,
+      projPct: port.weightedPct, projects: port.total, offTrack: port.offTrack,
+      habitPct: hb.length? Math.round(hb.reduce((x,h)=>x+habitConsistency(h),0)/hb.length) : null, habits: hb.length };
+  });
+  const html = `<h1>Life areas</h1>
+    <p class="muted">Generated ${new Date().toLocaleDateString(undefined,{year:'numeric',month:'long',day:'numeric'})} &nbsp;·&nbsp; ${areas.length} area${areas.length===1?'':'s'}</p>
+    <table cellpadding="6" cellspacing="0" border="1" style="border-collapse:collapse;border-color:#E2E8F0">
+      <tr><th align="left">Life area</th><th align="right">Tasks done</th><th align="right">Task %</th><th align="right">Projects</th><th align="right">Project %</th><th align="right">Off track</th><th align="right">Habit 30d</th></tr>
+      ${rows.map(r=>`<tr><td>${esc(r.name)}</td><td align="right">${r.done}/${r.total}</td><td align="right">${r.taskPct==null?'—':r.taskPct+'%'}</td><td align="right">${r.projects}</td><td align="right">${r.projPct==null?'—':r.projPct+'%'}</td><td align="right">${r.offTrack}</td><td align="right">${r.habitPct==null?'—':r.habitPct+'%'}</td></tr>`).join('')}
+    </table>
+    <p class="muted">Task % counts tasks and projects closed in the area. Project % is effort-weighted across that area's active projects; areas whose projects have no milestones show no percentage.</p>`;
+  downloadWordDoc(`life-areas-${todayISO()}.doc`, 'Life areas', html);
+  pushToast('Life areas report downloaded');
+}
+
+function exportHabitsReport(){
+  const list = state.state.habits;
+  const freqLabel = h => { const f=h.frequency||{type:'daily'};
+    return f.type==='weekly' ? `${f.target}x per week`
+         : f.type==='days' ? (f.days||[]).map(d=>DAY_LABELS[d]).join(', ')
+         : 'Every day'; };
+  const html = `<h1>Habits</h1>
+    <p class="muted">Generated ${new Date().toLocaleDateString(undefined,{year:'numeric',month:'long',day:'numeric'})} &nbsp;·&nbsp; ${list.filter(h=>h.active!==false).length} active, ${list.filter(h=>h.active===false).length} retired</p>
+    <table cellpadding="6" cellspacing="0" border="1" style="border-collapse:collapse;border-color:#E2E8F0">
+      <tr><th align="left">Habit</th><th align="left">Life area</th><th align="left">Schedule</th><th align="right">Streak</th><th align="right">7 days</th><th align="right">30 days</th><th align="left">State</th></tr>
+      ${list.map(h=>`<tr>
+        <td>${esc(h.emoji||'')} ${esc(h.name)}</td>
+        <td>${esc(h.category||'—')}</td>
+        <td>${esc(freqLabel(h))}</td>
+        <td align="right">${fmtHabitStreak(h)}</td>
+        <td align="right">${habitConsistency(h,7)}%</td>
+        <td align="right">${habitConsistency(h,30)}%</td>
+        <td>${h.active===false?'Retired':'Active'}</td>
+      </tr>`).join('') || '<tr><td colspan="7" class="muted">No habits yet</td></tr>'}
+    </table>`;
+  downloadWordDoc(`habits-${todayISO()}.doc`, 'Habits', html);
+  pushToast('Habits report downloaded');
+}
+
+function exportTimelineReport(){
+  const rows = completedItems().filter(inHistoryRange).sort((a,b)=>b.completedAt.localeCompare(a.completedAt));
+  const label = {month:'this month','30d':'last 30 days',all:'all time',custom:'selected range'}[ui.historyRange] || '';
+  const html = `<h1>Completed work</h1>
+    <p class="muted">Generated ${new Date().toLocaleDateString(undefined,{year:'numeric',month:'long',day:'numeric'})} &nbsp;·&nbsp; ${label} &nbsp;·&nbsp; ${rows.length} completed</p>
+    <table cellpadding="6" cellspacing="0" border="1" style="border-collapse:collapse;border-color:#E2E8F0">
+      <tr><th align="left">Completed</th><th align="left">Item</th><th align="left">Type</th><th align="left">Life area</th><th align="left">Project</th><th align="left">Owner</th></tr>
+      ${rows.map(it=>{ const proj = it.projectId? byId(it.projectId) : null;
+        return `<tr>
+          <td>${esc(it.completedAt.slice(0,10))}</td>
+          <td>${esc(it.title)}</td>
+          <td>${it.type==='project'?'Project':it.type==='followup'?'Follow-up':'Task'}</td>
+          <td>${esc(it.category)}</td>
+          <td>${proj? esc(proj.title):'—'}</td>
+          <td>${esc(it.assignee||'—')}</td>
+        </tr>`; }).join('') || '<tr><td colspan="6" class="muted">Nothing completed in this range</td></tr>'}
+    </table>`;
+  downloadWordDoc(`completed-${todayISO()}.doc`, 'Completed work', html);
+  pushToast('Completed-work report downloaded');
+}
+
 /* =========================================================
    Event wiring (delegated)
    ========================================================= */
@@ -2396,6 +2646,12 @@ document.addEventListener('change', (e)=>{
   const t = e.target.closest('[data-action-change]');
   if(!t) return;
   handleAction(t.getAttribute('data-action-change'), t);
+});
+
+document.addEventListener('input', (e)=>{
+  const t = e.target.closest('[data-action-input]');
+  if(!t) return;
+  handleAction(t.getAttribute('data-action-input'), t);
 });
 
 function handleAction(action, el){
@@ -2435,6 +2691,14 @@ function handleAction(action, el){
     case 'reports-tab': ui.reportsTab = el.getAttribute('data-tab'); render(); break;
     case 'project-health-filter': ui.projectHealthFilter = el.getAttribute('data-health'); render(); break;
     case 'export-portfolio': exportPortfolioReport(); break;
+    case 'export-report': {
+      const t = ui.reportsTab;
+      if(t==='areas') exportAreasReport();
+      else if(t==='habits') exportHabitsReport();
+      else if(t==='timeline') exportTimelineReport();
+      else exportPortfolioReport();
+      break;
+    }
     case 'import-preview': {
       const box = qs('#import-input');
       ui.importText = box ? box.value : '';
@@ -2452,6 +2716,95 @@ function handleAction(action, el){
       break;
     }
     case 'open-portfolio-report': ui.view='reports'; ui.reportsTab='projects'; ui.projectHealthFilter='all'; render(); break;
+    case 'manage-domains': modalManageDomains(); break;
+    case 'add-domain': {
+      const input = qs('#new-domain');
+      const val = input && input.value.trim();
+      if(val){ if(addLifeArea(val)){ persist(); modalManageDomains(); } else pushToast('That domain already exists'); }
+      break;
+    }
+    case 'rename-domain': {
+      const oldName = el.getAttribute('data-area');
+      const next = window.prompt('Rename domain — everything filed under it moves with the name.', oldName);
+      if(next===null) break;
+      if(renameLifeArea(oldName, next)){ persist(); modalManageDomains(); }
+      else pushToast('Pick a new name that is not already in use');
+      break;
+    }
+    case 'merge-domain': {
+      const from = el.getAttribute('data-area');
+      const sel = qs(`[data-role="merge-target"][data-area="${cssEscape(from)}"]`);
+      const into = sel && sel.value;
+      if(!into){ pushToast('Choose a domain to merge into first'); break; }
+      const u = areaUsage(from);
+      if(!window.confirm(`Move ${u.projects} project(s), ${u.items} item(s) and ${u.habits} habit(s) from "${from}" into "${into}", then remove "${from}"?`)) break;
+      if(mergeLifeArea(from, into)){ persist(); modalManageDomains(); pushToast(`Merged into ${into}`); }
+      break;
+    }
+    case 'delete-domain': {
+      const name = el.getAttribute('data-area');
+      const u = areaUsage(name);
+      if(!window.confirm(`Delete "${name}"? ${u.items} item(s) return to the Inbox and ${u.habits} habit(s) become unassigned. Merge instead if you want to keep them grouped.`)) break;
+      deleteLifeArea(name);
+      if(ui.projectFilter===name) ui.projectFilter='all';
+      persist(); modalManageDomains();
+      break;
+    }
+    case 'rename-subtask': {
+      const proj = byId(id), sub = proj && (proj.subtasks||[]).find(x=>x.id===el.getAttribute('data-sub'));
+      if(sub) modalRenameSubtask(proj, sub);
+      break;
+    }
+    case 'confirm-rename-subtask': {
+      const proj = byId(id), sub = proj && (proj.subtasks||[]).find(x=>x.id===el.getAttribute('data-sub'));
+      const val = qs('#ms-title') && qs('#ms-title').value.trim();
+      if(sub && val){ sub.title = val; closeModal(); persist(); }
+      break;
+    }
+    case 'delete-subtask': {
+      const proj = byId(id);
+      if(!proj) break;
+      const idx = (proj.subtasks||[]).findIndex(x=>x.id===el.getAttribute('data-sub'));
+      if(idx<0) break;
+      const sub = proj.subtasks[idx];
+      if(!window.confirm(`Delete the milestone "${sub.title}"? This cannot be undone.`)) break;
+      proj.subtasks.splice(idx,1);
+      persist();
+      break;
+    }
+    case 'move-project': {
+      let view = projects();
+      if(!ui.showArchived) view = view.filter(p=>inactiveProjects.indexOf(p.id)===-1);
+      if(ui.projectFilter!=='all') view = view.filter(p=>p.category===ui.projectFilter);
+      if(ui.projectSearch) view = view.filter(p=>matchesSearch(p.title, ui.projectSearch)
+        || matchesSearch(p.category, ui.projectSearch) || matchesSearch(p.assignee, ui.projectSearch)
+        || (p.subtasks||[]).some(st=>matchesSearch(st.title, ui.projectSearch)));
+      if(reorderItemsBy(view, +el.getAttribute('data-i'), +el.getAttribute('data-dir'))) persist();
+      break;
+    }
+    case 'move-inbox': {
+      let view = inboxItems();
+      if(ui.inboxAssigneeFilter!=='all') view = view.filter(i=>i.assignee===ui.inboxAssigneeFilter);
+      if(ui.inboxSearch) view = view.filter(i=>matchesSearch(i.title, ui.inboxSearch) || matchesSearch(i.assignee, ui.inboxSearch));
+      if(reorderItemsBy(view, +el.getAttribute('data-i'), +el.getAttribute('data-dir'))) persist();
+      break;
+    }
+    case 'project-search-changed': ui.projectSearch = el.value; render(); break;
+    case 'reports-search-changed': ui.reportsSearch = el.value; render(); break;
+    case 'clear-reports-search': ui.reportsSearch=''; render(); break;
+    case 'clear-project-search': ui.projectSearch=''; render(); break;
+    case 'inbox-search-changed': ui.inboxSearch = el.value; render(); break;
+    case 'clear-inbox-search': ui.inboxSearch=''; render(); break;
+    case 'move-subtask': {
+      const proj = byId(id);
+      if(proj && moveInArray(proj.subtasks, +el.getAttribute('data-i'), +el.getAttribute('data-dir'))) persist();
+      break;
+    }
+    case 'move-child': {
+      const kids = tasksOf(id);
+      if(reorderItemsBy(kids, +el.getAttribute('data-i'), +el.getAttribute('data-dir'))) persist();
+      break;
+    }
     case 'cycle-effort': {
       const sid = el.getAttribute('data-sub');
       const owner = byId(id);
@@ -2587,7 +2940,7 @@ function handleAction(action, el){
       const emoji = qs('#habit-emoji').value.trim()||'✅';
       const category = qs('#habit-cat').value || null;
       const frequency = readHabitFrequencyFromForm();
-      if(name){ state.state.habits.push({id:uid(), name, emoji, category, frequency, createdAt:new Date().toISOString(), log:{}}); closeModal(); persist(); }
+      if(name){ state.state.habits.push({id:uid(), name, emoji, category, frequency, active:true, createdAt:new Date().toISOString(), log:{}}); closeModal(); persist(); }
       break;
     }
     case 'edit-habit': { const h = state.state.habits.find(x=>x.id===id); if(h) modalEditHabit(h); break; }
@@ -2611,6 +2964,17 @@ function handleAction(action, el){
       break;
     }
     case 'toggle-hb-day': el.classList.toggle('on'); break;
+    case 'habit-week': ui.habitWeekOffset = Math.max(0, ui.habitWeekOffset + (+el.getAttribute('data-dir'))); render(); break;
+    case 'toggle-inactive-habits': ui.showInactiveHabits = !ui.showInactiveHabits; render(); break;
+    case 'toggle-habit-active': {
+      const h = state.state.habits.find(x=>x.id===id);
+      if(h){ h.active = h.active===false; pushToast(h.active? `"${h.name}" is active again` : `"${h.name}" retired — its history is kept`); persist(); }
+      break;
+    }
+    case 'move-habit': {
+      if(moveInArray(state.state.habits, +el.getAttribute('data-i'), +el.getAttribute('data-dir'))) persist();
+      break;
+    }
     case 'delete-habit': {
       const hs = state.state.habits; const i = hs.findIndex(h=>h.id===id);
       if(i>=0) hs.splice(i,1); persist(); break;
