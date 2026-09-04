@@ -210,6 +210,12 @@
       .sub-row{display:flex;align-items:center;gap:10px;padding:6px 0;font-size:13.5px}
       .sub-add{display:flex;gap:8px;margin-top:8px}
       .sub-add input{flex:1;padding:7px 10px;border-radius:8px;border:1px solid var(--c-border);background:var(--c-surface);font-size:13px}
+      .import-box{width:100%;min-height:130px;padding:11px 13px;border-radius:10px;border:1px solid var(--c-border);background:var(--c-surface-alt);color:var(--c-text);font-family:'JetBrains Mono',monospace;font-size:11.5px;line-height:1.55;resize:vertical}
+      .import-box:focus{outline:2px solid var(--c-info-dim);border-color:var(--c-info)}
+      .import-plan{border:1px solid var(--c-border);border-radius:10px;padding:12px 14px;background:var(--c-surface-alt);margin-top:12px;font-size:13px}
+      .import-plan ul{margin:6px 0 0;padding-left:18px}
+      .import-plan li{margin:2px 0}
+      .import-err{border-color:var(--c-danger);color:var(--c-danger)}
       .section-label{font-size:11px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--c-text-muted);margin:14px 0 8px}
       .section-label:first-child{margin-top:0}
 
@@ -570,6 +576,8 @@ const ui = {
   historyWeekOffset: 0,       // weeks back from current, for the Reports habit-history pager
   reportsTab: 'areas',        // areas | projects | habits | timeline
   projectHealthFilter: 'all', // all | offtrack | stalled | noplan — Reports > Projects
+  importText: '',             // Settings > Import — raw pasted JSON
+  importPlan: null,           // parsed preview, or {error}
 };
 
 /* =========================================================
@@ -1759,6 +1767,17 @@ function renderSettingsView(){
       </div>
       <button class="btn" data-action="toggle-theme">${state.state.settings.themeMode==='dark'?'Switch to Light':'Switch to Dark'}</button>
     </div>
+    <div class="section-label">Import</div>
+    <div class="card" style="margin-bottom:22px">
+      <div style="font-weight:600;font-size:14.5px">Bulk import</div>
+      <div class="view-sub" style="margin:2px 0 10px">Paste a JSON block to create projects with their milestones, tasks and effort sizes, plus habits and any life areas they need. Nothing is deleted or overwritten — anything that already exists is skipped.</div>
+      <textarea class="import-box" id="import-input" placeholder='{ "projects": [ … ], "habits": [ … ] }'>${esc(ui.importText||'')}</textarea>
+      <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+        <button class="btn" data-action="import-preview">Check it</button>
+        ${ui.importText? `<button class="btn btn-ghost" data-action="import-clear">Clear</button>`:''}
+      </div>
+      ${renderImportPlan()}
+    </div>
     <div class="section-label" style="color:var(--c-danger)">Danger zone</div>
     <div class="card" style="border-color:var(--c-danger-dim);display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
       <div>
@@ -2116,6 +2135,143 @@ function modalEditItem(item){
 }
 
 /* =========================================================
+   Bulk import — paste a JSON block to create projects, their
+   milestones and tasks, habits and any life areas they need.
+
+   Purely additive: nothing is ever deleted or overwritten. A project
+   whose title already exists is skipped and reported, so re-importing
+   the same block twice is safe.
+   ========================================================= */
+const IMPORT_PRIORITIES = ['low','medium','high'];
+
+function planImport(text){
+  let raw;
+  try{ raw = JSON.parse(text); }
+  catch(e){ return {error:'That is not valid JSON — copy the whole block including the outer { and }.'}; }
+  if(!raw || typeof raw!=='object' || Array.isArray(raw)) return {error:'Expected a JSON object with "projects" and/or "habits".'};
+
+  const plan = {areas:[], projects:[], habits:[], skippedProjects:[], skippedHabits:[], warnings:[]};
+  const haveArea = new Set(state.state.lifeAreas.map(a=>a.name));
+  const wantArea = n=>{
+    n = String(n||'').trim();
+    if(!n || n==='Inbox') return 'Inbox';
+    if(!haveArea.has(n) && plan.areas.indexOf(n)<0) plan.areas.push(n);
+    return n;
+  };
+  (Array.isArray(raw.lifeAreas) ? raw.lifeAreas : []).forEach(wantArea);
+
+  const effortOf = v => EFFORT[v] ? v : DEFAULT_EFFORT;
+  const dateOf = v => (typeof v==='string' && /^\d{4}-\d{2}-\d{2}$/.test(v)) ? v : null;
+  const priorityOf = v => IMPORT_PRIORITIES.indexOf(v)>=0 ? v : 'medium';
+
+  const takenProject = new Set(projects().map(p=>p.title.trim().toLowerCase()));
+  (Array.isArray(raw.projects) ? raw.projects : []).forEach(p=>{
+    if(!p || typeof p!=='object') return;
+    const title = String(p.title||'').trim();
+    if(!title){ plan.warnings.push('A project with no title was skipped.'); return; }
+    if(takenProject.has(title.toLowerCase())){ plan.skippedProjects.push(title); return; }
+    takenProject.add(title.toLowerCase());
+    const category = wantArea(p.category);
+    const start = dateOf(p.startDate), due = dateOf(p.dueDate);
+    if(start && due && start > due){
+      plan.warnings.push(`"${title}": start date is after the due date — both dropped.`);
+    }
+    plan.projects.push({
+      title, category,
+      priority: priorityOf(p.priority),
+      startDate: (start && due && start > due) ? null : start,
+      dueDate: (start && due && start > due) ? null : due,
+      assignee: (typeof p.assignee==='string' && p.assignee.trim()) ? p.assignee.trim() : null,
+      starred: !!p.starred,
+      archived: !!p.archived,
+      milestones: (Array.isArray(p.milestones)?p.milestones:[]).map(m=>({
+        title: String((m&&m.title)||'').trim(), effort: effortOf(m&&m.effort)
+      })).filter(m=>m.title),
+      tasks: (Array.isArray(p.tasks)?p.tasks:[]).map(t=>({
+        title: String((t&&t.title)||'').trim(), effort: effortOf(t&&t.effort),
+        dueDate: dateOf(t&&t.dueDate), priority: priorityOf(t&&t.priority),
+        assignee: (t && typeof t.assignee==='string' && t.assignee.trim()) ? t.assignee.trim() : null
+      })).filter(t=>t.title)
+    });
+  });
+
+  const takenHabit = new Set(state.state.habits.map(h=>h.name.trim().toLowerCase()));
+  (Array.isArray(raw.habits) ? raw.habits : []).forEach(h=>{
+    if(!h || typeof h!=='object') return;
+    const name = String(h.name||'').trim();
+    if(!name){ plan.warnings.push('A habit with no name was skipped.'); return; }
+    if(takenHabit.has(name.toLowerCase())){ plan.skippedHabits.push(name); return; }
+    takenHabit.add(name.toLowerCase());
+    let f = h.frequency;
+    if(!f || typeof f!=='object') f = {type:'daily'};
+    if(f.type==='days'){ f = {type:'days', days: Array.isArray(f.days)? f.days.filter(d=>d>=0&&d<=6) : [0,1,2,3,4,5,6]}; }
+    else if(f.type==='weekly'){ f = {type:'weekly', target: Math.max(1, Math.min(7, parseInt(f.target,10)||3))}; }
+    else f = {type:'daily'};
+    plan.habits.push({
+      name, emoji: String(h.emoji||'✅').slice(0,4),
+      category: h.category ? wantArea(h.category) : null,
+      frequency: f
+    });
+  });
+
+  const total = plan.areas.length + plan.projects.length + plan.habits.length;
+  if(!total && !plan.skippedProjects.length && !plan.skippedHabits.length){
+    return {error:'Nothing to import — the block contained no projects, habits or life areas.'};
+  }
+  return plan;
+}
+
+function applyImport(plan){
+  plan.areas.forEach(addLifeArea);
+  let steps = 0, archivedAny = false;
+  plan.projects.forEach(p=>{
+    const proj = newItem({
+      type:'project', title:p.title, category:p.category, priority:p.priority,
+      startDate:p.startDate, dueDate:p.dueDate, assignee:p.assignee, isStarred:p.starred,
+      subtasks: p.milestones.map(m=>({id:uid(), title:m.title, done:false, xpAwarded:false, effort:m.effort, doneAt:null}))
+    });
+    steps += p.milestones.length;
+    p.tasks.forEach(t=>{
+      newItem({ type:'task', title:t.title, projectId:proj.id, category:p.category,
+        priority:t.priority, dueDate:t.dueDate, assignee:t.assignee, effort:t.effort });
+      steps++;
+    });
+    if(p.archived && inactiveProjects.indexOf(proj.id)<0){ inactiveProjects.push(proj.id); archivedAny = true; }
+  });
+  plan.habits.forEach(h=>{
+    state.state.habits.push({ id:uid(), name:h.name, emoji:h.emoji, category:h.category, log:{}, frequency:h.frequency });
+  });
+  if(archivedAny) saveInactive();
+  persist();
+  return {projects:plan.projects.length, steps, habits:plan.habits.length, areas:plan.areas.length};
+}
+
+function renderImportPlan(){
+  const plan = ui.importPlan;
+  if(!plan) return '';
+  if(plan.error) return `<div class="import-plan import-err"><b>Could not read that.</b><br>${esc(plan.error)}</div>`;
+  const li = [];
+  if(plan.areas.length) li.push(`<li><b>${plan.areas.length}</b> new life area${plan.areas.length===1?'':'s'}: ${plan.areas.map(esc).join(', ')}</li>`);
+  if(plan.projects.length){
+    const steps = plan.projects.reduce((a,p)=>a+p.milestones.length+p.tasks.length, 0);
+    const pts = plan.projects.reduce((a,p)=>a
+      + p.milestones.reduce((b,m)=>b+EFFORT[m.effort].weight, 0)
+      + p.tasks.reduce((b,t)=>b+EFFORT[t.effort].weight, 0), 0);
+    li.push(`<li><b>${plan.projects.length}</b> project${plan.projects.length===1?'':'s'} with <b>${steps}</b> steps (${pts} effort points)</li>`);
+  }
+  if(plan.habits.length) li.push(`<li><b>${plan.habits.length}</b> habit${plan.habits.length===1?'':'s'}</li>`);
+  if(plan.skippedProjects.length) li.push(`<li style="color:var(--c-warn)"><b>${plan.skippedProjects.length}</b> project${plan.skippedProjects.length===1?'':'s'} already exist and will be skipped: ${plan.skippedProjects.map(esc).join(', ')}</li>`);
+  if(plan.skippedHabits.length) li.push(`<li style="color:var(--c-warn)"><b>${plan.skippedHabits.length}</b> habit${plan.skippedHabits.length===1?'':'s'} already exist and will be skipped</li>`);
+  plan.warnings.forEach(w=>li.push(`<li style="color:var(--c-warn)">${esc(w)}</li>`));
+  const nothing = !plan.areas.length && !plan.projects.length && !plan.habits.length;
+  return `<div class="import-plan">
+    <b>${nothing? 'Nothing new to add — it is all already here.' : 'Ready to import:'}</b>
+    <ul>${li.join('')}</ul>
+    ${nothing? '' : `<button class="btn btn-primary btn-sm" data-action="import-apply" style="margin-top:12px">Import ${plan.projects.length+plan.habits.length} item${plan.projects.length+plan.habits.length===1?'':'s'}</button>`}
+  </div>`;
+}
+
+/* =========================================================
    Lightweight DOCX-compatible export (no external library)
    ========================================================= */
 function downloadWordDoc(filename, title, bodyHtml){
@@ -2258,6 +2414,22 @@ function handleAction(action, el){
     case 'reports-tab': ui.reportsTab = el.getAttribute('data-tab'); render(); break;
     case 'project-health-filter': ui.projectHealthFilter = el.getAttribute('data-health'); render(); break;
     case 'export-portfolio': exportPortfolioReport(); break;
+    case 'import-preview': {
+      const box = qs('#import-input');
+      ui.importText = box ? box.value : '';
+      ui.importPlan = ui.importText.trim() ? planImport(ui.importText) : {error:'Paste the import block first.'};
+      render();
+      break;
+    }
+    case 'import-clear': ui.importText=''; ui.importPlan=null; render(); break;
+    case 'import-apply': {
+      if(!ui.importPlan || ui.importPlan.error) break;
+      const r = applyImport(ui.importPlan);
+      ui.importText=''; ui.importPlan=null;
+      pushToast(`Imported ${r.projects} project${r.projects===1?'':'s'}, ${r.steps} steps and ${r.habits} habit${r.habits===1?'':'s'}`, true);
+      ui.view='projects'; render();
+      break;
+    }
     case 'open-portfolio-report': ui.view='reports'; ui.reportsTab='projects'; ui.projectHealthFilter='all'; render(); break;
     case 'cycle-effort': {
       const sid = el.getAttribute('data-sub');
