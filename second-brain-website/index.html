@@ -177,8 +177,31 @@
       .project-card{border-radius:var(--radius-lg);border:1px solid var(--c-border);background:var(--c-surface);margin-bottom:14px;overflow:hidden}
       .project-head{display:flex;align-items:center;gap:12px;padding:16px 18px;cursor:pointer}
       .project-title{font-size:15.5px;font-weight:600}
-      .project-progress-track{height:6px;border-radius:99px;background:var(--c-surface-alt);overflow:hidden;margin-top:8px}
+      .project-progress-track{height:6px;border-radius:99px;background:var(--c-surface-alt);margin-top:8px;position:relative;overflow:visible}
       .project-progress-fill{height:100%;background:var(--c-good);border-radius:99px}
+      .project-progress-track.risk .project-progress-fill{background:var(--c-warn)}
+      .project-progress-track.behind .project-progress-fill{background:var(--c-danger)}
+      .sched-marker{position:absolute;top:-3px;bottom:-3px;width:2px;border-radius:2px;background:var(--c-text-secondary);opacity:.8}
+      .health-chip{display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:700;padding:2px 8px;border-radius:99px;border:1px solid;white-space:nowrap}
+      .health-ahead{color:var(--c-good);border-color:var(--c-good);background:var(--c-good-dim)}
+      .health-ontrack{color:var(--c-info);border-color:var(--c-info);background:var(--c-info-dim)}
+      .health-risk{color:var(--c-warn);border-color:var(--c-warn);background:var(--c-warn-dim)}
+      .health-behind{color:var(--c-danger);border-color:var(--c-danger);background:var(--c-danger-dim)}
+      .health-overdue{color:var(--c-danger);border-color:var(--c-danger);background:var(--c-danger-dim)}
+      .health-noplan{color:var(--c-text-muted);border-color:var(--c-border-strong);background:var(--c-surface-alt)}
+      .health-nodate{color:var(--c-text-muted);border-color:var(--c-border-strong);background:var(--c-surface-alt)}
+      .health-done{color:var(--c-good);border-color:var(--c-good);background:var(--c-good-dim)}
+      .health-stalled{color:var(--c-warn);border-color:var(--c-warn);background:var(--c-warn-dim)}
+      .effort-chip{font-family:'JetBrains Mono',monospace;font-size:10px;font-weight:700;line-height:16px;min-width:22px;text-align:center;padding:0 5px;border-radius:5px;border:1px solid var(--c-border-strong);background:var(--c-surface);color:var(--c-text-muted);cursor:pointer;flex-shrink:0}
+      .effort-chip:hover{border-color:var(--c-focus);color:var(--c-focus)}
+      .rollup-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(112px,1fr));gap:10px;margin-bottom:14px}
+      .rollup-tile{background:var(--c-surface);border:1px solid var(--c-border);border-radius:var(--radius-lg);padding:12px 14px}
+      .rollup-tile .v{font-family:'JetBrains Mono',monospace;font-size:21px;font-weight:700;color:var(--c-text);line-height:1.1}
+      .rollup-tile .k{font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--c-text-muted);margin-top:5px}
+      .mini-table{width:100%;border-collapse:collapse;font-size:12.5px;margin-bottom:4px}
+      .mini-table th{text-align:left;font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--c-text-muted);padding:0 10px 7px 0;font-weight:700}
+      .mini-table td{padding:7px 10px 7px 0;border-top:1px solid var(--c-border);vertical-align:middle}
+      .mini-table td.num{font-family:'JetBrains Mono',monospace;text-align:right;padding-right:0;white-space:nowrap}
       .project-body{border-top:1px solid var(--c-border);padding:16px 18px;background:var(--c-surface-alt)}
       .sub-list{margin-bottom:12px}
       .sub-row{display:flex;align-items:center;gap:10px;padding:6px 0;font-size:13.5px}
@@ -265,6 +288,33 @@ const AREA_MIGRATION_MAP = {
 };
 const XP_TASK = 10, XP_MILESTONE = 25, XP_HABITS = 15;
 
+/* Effort weighting — a step's size, so a 3-week survey doesn't count the same as a phone call. */
+const EFFORT_ORDER = ['S','M','L','XL'];
+const EFFORT = {
+  S:  { weight:1, label:'S',  title:'Small — hours' },
+  M:  { weight:2, label:'M',  title:'Medium — a day or two' },
+  L:  { weight:3, label:'L',  title:'Large — about a week' },
+  XL: { weight:5, label:'XL', title:'Extra large — multiple weeks' }
+};
+const DEFAULT_EFFORT = 'S';
+
+/* Schedule-health bands: weighted completion % minus % of the timeline already spent. */
+const HEALTH_AHEAD_MIN = 10;    // >= +10pts  -> ahead
+const HEALTH_TRACK_MIN = -10;   // >= -10pts  -> on track
+const HEALTH_RISK_MIN  = -25;   // >= -25pts  -> at risk, below that -> behind
+const STALL_DAYS = 14;          // no step closed in this many days -> stalled
+const HEALTH_META = {
+  done:    { cls:'health-done',    label:'Complete' },
+  overdue: { cls:'health-overdue', label:'Overdue' },
+  behind:  { cls:'health-behind',  label:'Behind' },
+  risk:    { cls:'health-risk',    label:'At risk' },
+  ontrack: { cls:'health-ontrack', label:'On track' },
+  ahead:   { cls:'health-ahead',   label:'Ahead' },
+  nodate:  { cls:'health-nodate',  label:'No due date' },
+  noplan:  { cls:'health-noplan',  label:'No plan' }
+};
+const HEALTH_ORDER = ['overdue','behind','risk','ontrack','ahead','nodate','noplan','done'];
+
 /* =========================================================
    Small utilities
    ========================================================= */
@@ -339,13 +389,20 @@ function loadRoot(){
   st.items.forEach(it=>{
     if(!it.id) it.id = uid();
     if(!Array.isArray(it.subtasks)) it.subtasks = [];
-    it.subtasks.forEach(s=>{ if(!s.id) s.id=uid(); if(s.xpAwarded==null) s.xpAwarded=!!s.done; });
+    it.subtasks.forEach(s=>{
+      if(!s.id) s.id=uid();
+      if(s.xpAwarded==null) s.xpAwarded=!!s.done;
+      if(!EFFORT[s.effort]) s.effort = DEFAULT_EFFORT;
+      if(s.doneAt===undefined) s.doneAt = null;   // legacy done milestones have no date; treated as pre-history
+      if(!s.done) s.doneAt = null;
+    });
     if(it.isStarred==null) it.isStarred=false;
     if(it.xpAwarded==null) it.xpAwarded = (it.status==='done'); // don't retro-award xp for legacy completed items
     if(!it.priority) it.priority='medium';
     if(!it.category) it.category='Inbox';
     if(!it.type) it.type='task';
     if(!it.status) it.status='open';
+    if(!EFFORT[it.effort]) it.effort = DEFAULT_EFFORT;
   });
   st.settings = st.settings || {};
   if(!Array.isArray(st.settings.nowPins)) st.settings.nowPins=[];
@@ -507,6 +564,7 @@ const ui = {
   historyCustomTo: null,
   historyWeekOffset: 0,       // weeks back from current, for the Reports habit-history pager
   reportsTab: 'areas',        // areas | projects | habits | timeline
+  projectHealthFilter: 'all', // all | offtrack | stalled | noplan — Reports > Projects
 };
 
 /* =========================================================
@@ -520,6 +578,189 @@ function projects(){ return items().filter(i=>i.type==='project'); }
 function tasksOf(projectId){ return items().filter(i=>i.projectId===projectId); }
 function followups(){ return items().filter(i=>i.type==='followup'); }
 function nowPins(){ return state.state.settings.nowPins; }
+
+/* =========================================================
+   Project analytics — one source of truth for every % in the app.
+
+   Completion is EFFORT-WEIGHTED: each milestone / child task carries an
+   S·M·L·XL size (1/2/3/5), so closing a three-week survey moves the bar
+   further than closing a phone call. Schedule progress is measured against
+   the project's own createdAt -> dueDate window, and the gap between the two
+   is what tells you whether a project is actually healthy.
+   ========================================================= */
+function effortWeight(x){ return (EFFORT[x && x.effort] || EFFORT[DEFAULT_EFFORT]).weight; }
+function cycleEffort(key){
+  const i = EFFORT_ORDER.indexOf(EFFORT[key] ? key : DEFAULT_EFFORT);
+  return EFFORT_ORDER[(i+1) % EFFORT_ORDER.length];
+}
+function dayDiff(fromMs, toMs){ return Math.round((toMs-fromMs)/86400000); }
+function endOfDayMs(dateISO){ const t = Date.parse(dateISO+'T23:59:59'); return isNaN(t)?null:t; }
+function clampPct(n){ return Math.max(0, Math.min(100, n)); }
+
+/* Every countable unit of a project: its milestones plus its child tasks. */
+function projectUnits(p){
+  const units = [];
+  (p.subtasks||[]).forEach(s=>units.push({
+    kind:'milestone', id:s.id, title:s.title, done:!!s.done,
+    weight:effortWeight(s), effort:(EFFORT[s.effort]?s.effort:DEFAULT_EFFORT),
+    doneAt:s.doneAt||null, dueDate:null
+  }));
+  tasksOf(p.id).forEach(c=>units.push({
+    kind:'task', id:c.id, title:c.title, done:c.status==='done',
+    weight:effortWeight(c), effort:(EFFORT[c.effort]?c.effort:DEFAULT_EFFORT),
+    doneAt:c.completedAt||null, dueDate:c.dueDate||null
+  }));
+  return units;
+}
+
+function projectStats(p){
+  const units = projectUnits(p);
+  const total = units.length;
+  const done = units.filter(u=>u.done).length;
+  const weightTotal = units.reduce((a,u)=>a+u.weight, 0);
+  const weightDone  = units.reduce((a,u)=>a+(u.done?u.weight:0), 0);
+  const hasPlan = total > 0;
+  const isDone = p.status==='done';
+
+  // Effort-weighted completion. A project with no steps has NO percentage —
+  // it is unmeasured, which is a different thing from 0% done.
+  const pct = hasPlan ? Math.round(weightDone/weightTotal*100) : (isDone?100:null);
+  const countPct = hasPlan ? Math.round(done/total*100) : (isDone?100:null);
+
+  // Schedule: how much of the project's own window has been spent.
+  const nowMs = Date.now();
+  const startMs = Date.parse(p.createdAt) || nowMs;
+  const dueMs = p.dueDate ? endOfDayMs(p.dueDate) : null;
+  let timePct = null, daysTotal = null, daysLeft = null, daysElapsed = null;
+  if(dueMs){
+    daysTotal = Math.max(1, dayDiff(startMs, dueMs));
+    daysElapsed = dayDiff(startMs, nowMs);
+    daysLeft = dayDiff(nowMs, dueMs);
+    timePct = clampPct((nowMs-startMs)/Math.max(1,(dueMs-startMs))*100);
+  }
+  const overdue = !!(dueMs && !isDone && nowMs > dueMs);
+  // Schedule variance in percentage points: positive = ahead of the calendar.
+  const variance = (pct!=null && timePct!=null) ? Math.round(pct - timePct) : null;
+
+  // Last time any step in this project actually closed.
+  const stamps = units.filter(u=>u.done && u.doneAt).map(u=>Date.parse(u.doneAt)).filter(n=>!isNaN(n));
+  const lastActivityMs = stamps.length ? Math.max.apply(null, stamps) : null;
+  const daysSinceActivity = dayDiff(lastActivityMs!=null?lastActivityMs:startMs, nowMs);
+  const stalled = hasPlan && !isDone && pct<100 && daysSinceActivity>=STALL_DAYS;
+
+  let health;
+  if(isDone || pct===100) health='done';
+  else if(!hasPlan) health='noplan';
+  else if(overdue) health='overdue';
+  else if(timePct==null) health='nodate';
+  else if(variance>=HEALTH_AHEAD_MIN) health='ahead';
+  else if(variance>=HEALTH_TRACK_MIN) health='ontrack';
+  else if(variance>=HEALTH_RISK_MIN) health='risk';
+  else health='behind';
+
+  return {
+    units, hasPlan, done, total, weightDone, weightTotal,
+    pct, countPct, timePct, variance, overdue, health,
+    daysTotal, daysLeft, daysElapsed, lastActivityMs, daysSinceActivity, stalled
+  };
+}
+
+/* Reconstruct a project's completion curve from when each step was closed.
+   Steps completed before the app started recording dates have no timestamp;
+   they are counted from the start of the window (flagged in the UI). */
+function projectHistory(p, maxPoints){
+  const units = projectUnits(p);
+  const weightTotal = units.reduce((a,u)=>a+u.weight, 0);
+  if(!weightTotal) return { points:[], undated:0 };
+  const undated = units.filter(u=>u.done && !u.doneAt).length;
+  const nowMs = Date.now();
+  const startMs = Math.min(Date.parse(p.createdAt)||nowMs, nowMs);
+  const span = Math.max(86400000, nowMs-startMs);
+  const n = Math.max(2, Math.min(maxPoints||14, Math.ceil(span/86400000)+1));
+  const points = [];
+  for(let i=0;i<n;i++){
+    const at = startMs + span*(i/(n-1));
+    const w = units.reduce((a,u)=>{
+      if(!u.done) return a;
+      const t = u.doneAt ? Date.parse(u.doneAt) : startMs;   // undated = already done at window start
+      return a + ((isNaN(t)?startMs:t) <= at ? u.weight : 0);
+    }, 0);
+    points.push({ ms:at, label:new Date(at).toLocaleDateString(undefined,{month:'short',day:'numeric'}), pct:Math.round(w/weightTotal*100) });
+  }
+  return { points, undated };
+}
+
+/* Portfolio roll-up: one number for the whole book of work, plus a
+   per-domain breakdown so IntelMotion / Nigist / Tamar read separately. */
+function portfolioStats(list){
+  const rows = list.map(p=>({ p, st:projectStats(p) }));
+  const planned = rows.filter(r=>r.st.hasPlan);
+  const weightTotal = planned.reduce((a,r)=>a+r.st.weightTotal, 0);
+  const weightDone  = planned.reduce((a,r)=>a+r.st.weightDone, 0);
+  const health = {};
+  HEALTH_ORDER.forEach(k=>health[k]=0);
+  rows.forEach(r=>{ health[r.st.health] = (health[r.st.health]||0)+1; });
+
+  const areaMap = {};
+  rows.forEach(r=>{
+    const key = r.p.category || 'Uncategorised';
+    const a = areaMap[key] || (areaMap[key] = { area:key, count:0, planned:0, weightDone:0, weightTotal:0, offTrack:0, stalled:0, noPlan:0 });
+    a.count++;
+    if(r.st.hasPlan){ a.planned++; a.weightDone+=r.st.weightDone; a.weightTotal+=r.st.weightTotal; }
+    else a.noPlan++;
+    if(r.st.health==='behind' || r.st.health==='risk' || r.st.health==='overdue') a.offTrack++;
+    if(r.st.stalled) a.stalled++;
+  });
+  const byArea = Object.values(areaMap).map(a=>Object.assign(a, {
+    pct: a.weightTotal ? Math.round(a.weightDone/a.weightTotal*100) : null
+  })).sort((x,y)=>(y.offTrack-x.offTrack) || (y.count-x.count) || x.area.localeCompare(y.area));
+
+  return {
+    rows, total:rows.length,
+    plannedCount: planned.length,
+    noPlanCount: rows.length - planned.length,
+    weightDone, weightTotal,
+    weightedPct: weightTotal ? Math.round(weightDone/weightTotal*100) : null,
+    simplePct: planned.length ? Math.round(planned.reduce((a,r)=>a+r.st.pct,0)/planned.length) : null,
+    offTrack: health.behind + health.risk + health.overdue,
+    stalledCount: rows.filter(r=>r.st.stalled).length,
+    health, byArea
+  };
+}
+
+/* ---------- shared progress UI fragments ---------- */
+function healthChip(st){
+  const m = HEALTH_META[st.health];
+  const v = st.variance!=null && st.health!=='done' && st.health!=='noplan'
+    ? ` ${st.variance>0?'+':''}${st.variance}pts` : '';
+  return `<span class="health-chip ${m.cls}" title="${esc(healthTitle(st))}">${m.label}${v}</span>`;
+}
+function healthTitle(st){
+  if(!st.hasPlan) return 'No milestones or tasks yet — this project has no measurable completion.';
+  if(st.timePct==null) return 'No due date, so completion cannot be compared against a schedule.';
+  return `${st.pct}% of the work done, ${Math.round(st.timePct)}% of the time spent`
+       + (st.daysLeft!=null ? ` · ${st.daysLeft<0?Math.abs(st.daysLeft)+'d overdue':st.daysLeft+'d left'}` : '');
+}
+function stalledChip(st){
+  return st.stalled ? `<span class="health-chip health-stalled" title="No step closed in ${st.daysSinceActivity} days">⏸ Stalled ${st.daysSinceActivity}d</span>` : '';
+}
+/* Bar with a tick showing where the calendar says you should be. */
+function progressBar(st, extraStyle){
+  const styleAttr = extraStyle ? ` style="${extraStyle}"` : '';
+  if(!st.hasPlan){
+    return `<div class="project-progress-track"${styleAttr}><div class="project-progress-fill" style="width:0%;background:var(--c-border-strong)"></div></div>`;
+  }
+  const cls = (st.health==='behind'||st.health==='overdue') ? ' behind' : st.health==='risk' ? ' risk' : '';
+  const marker = st.timePct!=null
+    ? `<div class="sched-marker" style="left:calc(${clampPct(st.timePct).toFixed(1)}% - 1px)" title="Schedule: ${Math.round(st.timePct)}% of the time window spent"></div>`
+    : '';
+  return `<div class="project-progress-track${cls}"${styleAttr}><div class="project-progress-fill" style="width:${st.pct}%"></div>${marker}</div>`;
+}
+function pctLabel(st){ return st.hasPlan ? `${st.pct}%` : 'Not broken down'; }
+function effortChip(effortKey, dataAttrs){
+  const e = EFFORT[effortKey] || EFFORT[DEFAULT_EFFORT];
+  return `<button class="effort-chip" data-action="cycle-effort" ${dataAttrs} title="Effort: ${esc(e.title)} (weight ${e.weight}) — click to change">${e.label}</button>`;
+}
 
 function upNextCandidates(){
   const pinned = new Set(nowPins());
@@ -551,7 +792,7 @@ function newItem(partial){
     id: uid(), type:'task', title:'', status:'open',
     category:'Inbox', priority:'medium', dueDate:null, createdAt: new Date().toISOString(),
     completedAt:null, projectId:null, subtasks:[], assignee:null,
-    contactName:null, lastContactDate:null, isStarred:false, xpAwarded:false
+    contactName:null, lastContactDate:null, isStarred:false, xpAwarded:false, effort:DEFAULT_EFFORT
   }, partial);
   items().push(it);
   return it;
@@ -615,6 +856,7 @@ function toggleSubtask(item, subId){
   const s = item.subtasks.find(x=>x.id===subId);
   if(!s) return;
   s.done = !s.done;
+  s.doneAt = s.done ? new Date().toISOString() : null;
   if(s.done && !s.xpAwarded){ grantXP(XP_MILESTONE,'Milestone done'); s.xpAwarded=true; }
 }
 
@@ -954,17 +1196,26 @@ function renderProjectsView(){
       ${areas.map(a=>`<button class="chip ${ui.projectFilter===a.name?'on':''}" data-action="filter-project" data-cat="${esc(a.name)}">${esc(a.name)}</button>`).join('')}
       <button class="chip ${ui.showArchived?'on':''}" data-action="toggle-archived" style="margin-left:auto">${ui.showArchived?'Hide':'Show'} archived</button>
     </div>
+    ${renderProjectsSummary(list)}
     ${list.length? list.map(renderProjectCard).join('') : `<div class="empty">No projects in this domain yet.</div>`}
   </div>`;
 }
 
+/* One-line health read on whatever slice of projects is on screen. */
+function renderProjectsSummary(list){
+  if(!list.length) return '';
+  const port = portfolioStats(list);
+  const bits = [];
+  bits.push(`<b>${port.weightedPct==null?'—':port.weightedPct+'%'}</b> complete across ${port.plannedCount} measurable project${port.plannedCount===1?'':'s'}`);
+  if(port.offTrack) bits.push(`<span style="color:var(--c-danger);font-weight:600">${port.offTrack} off track</span>`);
+  if(port.stalledCount) bits.push(`<span style="color:var(--c-warn);font-weight:600">${port.stalledCount} stalled</span>`);
+  if(port.noPlanCount) bits.push(`<span style="color:var(--c-warn);font-weight:600">${port.noPlanCount} not broken down</span>`);
+  return `<div class="view-sub" style="margin:-6px 0 16px">${bits.join(' · ')} · <a href="#" data-action="open-portfolio-report" style="color:var(--c-focus);font-weight:600">full roll-up →</a></div>`;
+}
+
 function renderProjectCard(p){
   const children = tasksOf(p.id);
-  const subDone = p.subtasks.filter(s=>s.done).length;
-  const childDone = children.filter(c=>c.status==='done').length;
-  const total = p.subtasks.length + children.length;
-  const done = subDone + childDone;
-  const pct = total? Math.round(done/total*100) : (p.status==='done'?100:0);
+  const st = projectStats(p);
   const expanded = ui.expandedProjects.has(p.id);
   const archived = inactiveProjects.indexOf(p.id)>=0;
   return `<div class="project-card" style="${archived?'opacity:.55':''}">
@@ -976,10 +1227,12 @@ function renderProjectCard(p){
           <span class="chip" style="${catStyle(p.category)}">${esc(p.category)}</span>
           <span class="dot pri-dot pri-${p.priority}"></span><span class="pri-${p.priority}">${p.priority}</span>
           ${p.dueDate?`<span>${fmtDue(p.dueDate)}</span>`:''}
-          <span>${done}/${total||0} done</span>
+          ${healthChip(st)}
+          ${stalledChip(st)}
+          <span>${st.hasPlan? `${pctLabel(st)} · ${st.done}/${st.total} steps · ${st.weightDone}/${st.weightTotal} effort` : 'No milestones or tasks yet'}</span>
           ${archived?'<span>· archived</span>':''}
         </div>
-        <div class="project-progress-track"><div class="project-progress-fill" style="width:${pct}%"></div></div>
+        ${progressBar(st)}
       </div>
       <div class="item-actions">
         <button class="icon-btn btn-sm" data-action="toggle-star" data-id="${p.id}" title="Star">⭐</button>
@@ -994,11 +1247,12 @@ function renderProjectCard(p){
 
 function renderProjectBody(p, children){
   return `<div class="project-body">
-    <div class="section-label">Milestones</div>
+    <div class="section-label">Milestones <span style="text-transform:none;letter-spacing:0;font-weight:500">— tap S/M/L/XL to size a step</span></div>
     <div class="sub-list">
       ${p.subtasks.map(s=>`
         <div class="sub-row">
           <button class="check ${s.done?'done':''}" style="width:17px;height:17px" data-action="toggle-subtask" data-id="${p.id}" data-sub="${s.id}">${checkSvg()}</button>
+          ${effortChip(s.effort, `data-id="${p.id}" data-sub="${s.id}"`)}
           <span style="${s.done?'text-decoration:line-through;color:var(--c-text-muted)':''}">${esc(s.title)}</span>
         </div>`).join('') || `<div class="view-sub">No milestones yet.</div>`}
       <div class="sub-add">
@@ -1010,6 +1264,7 @@ function renderProjectBody(p, children){
     ${children.map(c=>`
       <div class="item-row" style="background:var(--c-surface)">
         <button class="check ${c.status==='done'?'done':''}" data-action="complete" data-id="${c.id}">${checkSvg()}</button>
+        ${effortChip(c.effort, `data-id="${c.id}"`)}
         <div class="item-main">
           <div class="item-title ${c.status==='done'?'done':''}">${esc(c.title)}</div>
           ${renderMeta(c)}
@@ -1136,12 +1391,15 @@ function areaTaskPct(a){
   const done = areaItems.filter(i=>i.status==='done').length;
   return areaItems.length? Math.round(done/areaItems.length*100) : 0;
 }
-function projectPct(p){
-  const children = tasksOf(p.id);
-  const total = p.subtasks.length + children.length;
-  const done = p.subtasks.filter(s=>s.done).length + children.filter(c=>c.status==='done').length;
-  return total? Math.round(done/total*100) : (p.status==='done'?100:0);
+function projectPct(p){ const st = projectStats(p); return st.pct==null ? 0 : st.pct; }
+const HEALTH_BAR_COLOR = { done:'#10B981', ahead:'#10B981', ontrack:'#06B6D4', nodate:'#94A3B8', risk:'#F59E0B', behind:'#F43F5E', overdue:'#F43F5E', noplan:'#CBD5E1' };
+/* Chart.js comes from a CDN — render no card at all rather than an empty box when it is unavailable. */
+function chartsAvailable(){ return typeof Chart!=='undefined'; }
+function chartCard(id, height, extraStyle){
+  if(!chartsAvailable()) return '';
+  return `<div class="card" style="margin-bottom:18px;height:${height}px${extraStyle?';'+extraStyle:''}"><canvas id="${id}"></canvas></div>`;
 }
+
 function renderCharts(){
   destroyCharts();
   if(typeof Chart==='undefined') return;
@@ -1156,9 +1414,24 @@ function renderCharts(){
   }
   const projCanvas = document.getElementById('chart-projects');
   if(projCanvas){
-    const list = projects();
+    const rows = reportProjectRows().filter(r=>r.st.hasPlan);
     charts.projects = new Chart(projCanvas, { type:'bar',
-      data:{ labels: list.map(p=>p.title), datasets:[{ data: list.map(projectPct), backgroundColor:'#06B6D4', borderRadius:4 }] },
+      data:{ labels: rows.map(r=>r.p.title), datasets:[
+        { label:'Complete', data: rows.map(r=>r.st.pct), backgroundColor: rows.map(r=>HEALTH_BAR_COLOR[r.st.health]||'#06B6D4'), borderRadius:4 },
+        { label:'Schedule spent', data: rows.map(r=>r.st.timePct==null?null:Math.round(r.st.timePct)), backgroundColor:'transparent',
+          borderColor:'#64748B', borderWidth:{top:0,right:2,bottom:0,left:0}, borderRadius:0, barPercentage:.62, grouped:false }
+      ] },
+      options: Object.assign(barChartOptions(true), { plugins:{ legend:{ display:false },
+        tooltip:{ callbacks:{ label:(c)=> c.raw==null ? '' : `${c.dataset.label}: ${c.raw}%` } } } })
+    });
+  }
+
+  const portCanvas = document.getElementById('chart-portfolio');
+  if(portCanvas){
+    // Domains whose projects have no plan have no percentage — charting them as 0 would lie.
+    const measurable = portfolioStats(reportProjectList()).byArea.filter(a=>a.pct!=null);
+    charts.portfolio = new Chart(portCanvas, { type:'bar',
+      data:{ labels: measurable.map(a=>a.area), datasets:[{ data: measurable.map(a=>a.pct), backgroundColor:'#6366F1', borderRadius:4 }] },
       options: barChartOptions(true)
     });
   }
@@ -1197,12 +1470,15 @@ function renderAreaProgress(a){
   const pct = total? Math.round(done/total*100) : 0;
   const areaHabits = state.state.habits.filter(h=>h.category===a.name);
   const habitAvg = areaHabits.length? Math.round(areaHabits.reduce((s,h)=>s+habitConsistency(h),0)/areaHabits.length) : null;
+  const port = portfolioStats(reportProjectList().filter(p=>p.category===a.name));
   return `<div class="project-card">
     <div class="project-head" data-action="open-area" data-area="${esc(a.name)}">
       <div class="item-main">
         <div class="project-title">${esc(a.name)}</div>
         <div class="item-meta">
           <span>${done}/${total||0} tasks done</span>
+          ${port.total? `<span>· ${port.weightedPct==null?'no measurable':port.weightedPct+'%'} project completion (${port.total} project${port.total===1?'':'s'})</span>`:''}
+          ${port.offTrack? `<span style="color:var(--c-danger);font-weight:600">· ${port.offTrack} off track</span>`:''}
           ${habitAvg!=null? `<span>· ${habitAvg}% habit consistency (30d, ${areaHabits.length} habit${areaHabits.length===1?'':'s'})</span>`:''}
           ${(a.open_items||[]).length? `<span style="color:var(--c-warn);font-weight:600">· ${(a.open_items||[]).length} open in Binder</span>`:''}
         </div>
@@ -1234,6 +1510,7 @@ function renderReportsView(){
   return `<div class="view">
     <div class="view-head">
       <div><div class="view-title">Reports</div><div class="view-sub">Progress by life area, project, and habit — plus a full completed-tasks timeline.</div></div>
+      ${tab==='projects'? `<button class="btn" data-action="export-portfolio">⇩ Export portfolio</button>` : ''}
     </div>
     <div class="chip-row">
       <button class="chip ${tab==='areas'?'on':''}" data-action="reports-tab" data-tab="areas">Life Areas</button>
@@ -1249,42 +1526,94 @@ function renderReportsAreasView(){
   const areas = state.state.lifeAreas;
   return `
     <div class="view-sub" style="margin-bottom:14px">${areas.length} life area${areas.length===1?'':'s'} tracked.</div>
-    ${areas.length? `<div class="card" style="margin-bottom:18px;height:${Math.max(140,areas.length*32)}px"><canvas id="chart-areas"></canvas></div>` : ''}
+    ${areas.length? chartCard('chart-areas', Math.max(140,areas.length*32)) : ''}
     ${areas.length? areas.map(renderAreaProgress).join('') : `<div class="empty">No life areas yet — add one in the Life Binder tab.</div>`}
   `;
 }
 
+/* Active (non-archived) projects — the book of work the roll-up reports on. */
+function reportProjectList(){ return projects().filter(p=>inactiveProjects.indexOf(p.id)===-1); }
+function reportProjectRows(){
+  const rows = reportProjectList().map(p=>({ p, st:projectStats(p) }));
+  const f = ui.projectHealthFilter;
+  const kept = f==='offtrack' ? rows.filter(r=>r.st.health==='behind'||r.st.health==='risk'||r.st.health==='overdue')
+             : f==='stalled'  ? rows.filter(r=>r.st.stalled)
+             : f==='noplan'   ? rows.filter(r=>!r.st.hasPlan)
+             : rows;
+  return kept.sort((a,b)=>HEALTH_ORDER.indexOf(a.st.health)-HEALTH_ORDER.indexOf(b.st.health)
+                        || (b.st.weightTotal-a.st.weightTotal));
+}
+
 function renderReportsProjectsView(){
-  const list = projects();
-  const pctOf = p=>{
-    const children = tasksOf(p.id);
-    const total = p.subtasks.length + children.length;
-    const done = p.subtasks.filter(s=>s.done).length + children.filter(c=>c.status==='done').length;
-    return total? done/total*100 : (p.status==='done'?100:0);
-  };
-  const avgPct = list.length? Math.round(list.reduce((s,p)=>s+pctOf(p),0)/list.length) : 0;
+  const all = reportProjectList();
+  const port = portfolioStats(all);
+  const rows = reportProjectRows();
+  const f = ui.projectHealthFilter;
+  const chip = (key,label,count)=>`<button class="chip ${f===key?'on':''}" data-action="project-health-filter" data-health="${key}">${label}${count!=null?` (${count})`:''}</button>`;
+
+  if(!all.length) return `<div class="empty">No projects yet.</div>`;
+
   return `
-    <div class="view-sub" style="margin-bottom:14px">${list.length} project${list.length===1?'':'s'} · ${avgPct}% average completion.</div>
-    ${list.length? `<div class="card" style="margin-bottom:18px;height:${Math.max(140,list.length*32)}px"><canvas id="chart-projects"></canvas></div>` : ''}
-    ${list.length? list.map(p=>renderProjectReportRow(p,pctOf(p))).join('') : `<div class="empty">No projects yet.</div>`}
+    <div class="section-label" style="margin-top:0">Portfolio roll-up</div>
+    <div class="rollup-grid">
+      <div class="rollup-tile"><div class="v">${port.weightedPct==null?'—':port.weightedPct+'%'}</div><div class="k" title="All remaining effort across every measurable project, weighted by step size">Weighted complete</div></div>
+      <div class="rollup-tile"><div class="v">${port.simplePct==null?'—':port.simplePct+'%'}</div><div class="k" title="Plain average of each project's own percentage, ignoring size">Average project</div></div>
+      <div class="rollup-tile"><div class="v" style="color:${port.offTrack?'var(--c-danger)':'inherit'}">${port.offTrack}</div><div class="k">Off track</div></div>
+      <div class="rollup-tile"><div class="v" style="color:${port.stalledCount?'var(--c-warn)':'inherit'}">${port.stalledCount}</div><div class="k">Stalled ${STALL_DAYS}d+</div></div>
+      <div class="rollup-tile"><div class="v" style="color:${port.noPlanCount?'var(--c-warn)':'inherit'}">${port.noPlanCount}</div><div class="k">Not broken down</div></div>
+      <div class="rollup-tile"><div class="v">${port.total}</div><div class="k">Projects</div></div>
+    </div>
+    <div class="view-sub" style="margin-bottom:16px">
+      ${port.plannedCount} of ${port.total} project${port.total===1?'':'s'} measurable · ${port.weightDone} of ${port.weightTotal} effort points closed.
+      ${port.noPlanCount? `<b>${port.noPlanCount}</b> project${port.noPlanCount===1?' has':'s have'} no milestones or tasks, so ${port.noPlanCount===1?'it is':'they are'} excluded from every percentage above.`:''}
+    </div>
+
+    <div class="section-label">By domain</div>
+    ${port.byArea.some(a=>a.pct!=null)? chartCard('chart-portfolio', Math.max(130, port.byArea.filter(a=>a.pct!=null).length*34)) : ''}
+    <div class="card" style="margin-bottom:20px;padding:14px 16px">
+      <table class="mini-table">
+        <thead><tr><th>Domain</th><th class="num">Projects</th><th class="num">Weighted %</th><th class="num">Effort done</th><th class="num">Off track</th><th class="num">No plan</th></tr></thead>
+        <tbody>
+          ${port.byArea.map(a=>`<tr>
+            <td><span class="chip" style="${catStyle(a.area)}">${esc(a.area)}</span></td>
+            <td class="num">${a.count}</td>
+            <td class="num"><b>${a.pct==null?'—':a.pct+'%'}</b></td>
+            <td class="num">${a.weightDone}/${a.weightTotal||0}</td>
+            <td class="num" style="${a.offTrack?'color:var(--c-danger);font-weight:700':''}">${a.offTrack}</td>
+            <td class="num" style="${a.noPlan?'color:var(--c-warn);font-weight:700':''}">${a.noPlan}</td>
+          </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="section-label">Projects</div>
+    <div class="chip-row">
+      ${chip('all','All',port.total)}
+      ${chip('offtrack','Off track',port.offTrack)}
+      ${chip('stalled','Stalled',port.stalledCount)}
+      ${chip('noplan','No plan',port.noPlanCount)}
+    </div>
+    ${rows.filter(r=>r.st.hasPlan).length? chartCard('chart-projects', Math.max(140,rows.filter(r=>r.st.hasPlan).length*34)) : ''}
+    <div class="view-sub" style="margin-bottom:12px">Bar = work done. Grey tick = how much of the project's time window has been spent.</div>
+    ${rows.length? rows.map(r=>renderProjectReportRow(r.p, r.st)).join('') : `<div class="empty">No projects match this filter.</div>`}
   `;
 }
 
-function renderProjectReportRow(p, pct){
-  const children = tasksOf(p.id);
-  const total = p.subtasks.length + children.length;
-  const done = p.subtasks.filter(s=>s.done).length + children.filter(c=>c.status==='done').length;
+function renderProjectReportRow(p, st){
+  st = st || projectStats(p);
   return `<div class="project-card">
     <div class="project-head" data-action="open-project-report" data-id="${p.id}">
       <div class="item-main">
         <div class="project-title">${esc(p.title)}</div>
         <div class="item-meta">
           <span class="chip" style="${catStyle(p.category)}">${esc(p.category)}</span>
-          <span>${done}/${total||0} done</span>
+          ${healthChip(st)}
+          ${stalledChip(st)}
+          <span>${st.hasPlan? `${st.pct}% · ${st.done}/${st.total} steps · ${st.weightDone}/${st.weightTotal} effort` : 'No milestones or tasks yet'}</span>
           ${p.dueDate? `<span>${fmtDue(p.dueDate)}</span>`:''}
           ${p.assignee? `<span class="chip">👤 ${esc(p.assignee)}</span>`:''}
         </div>
-        <div class="project-progress-track"><div class="project-progress-fill" style="width:${Math.round(pct)}%"></div></div>
+        ${progressBar(st)}
       </div>
     </div>
   </div>`;
@@ -1295,7 +1624,7 @@ function renderReportsHabitsView(){
   const avgConsistency = list.length? Math.round(list.reduce((s,h)=>s+habitConsistency(h),0)/list.length) : 0;
   return `
     <div class="view-sub" style="margin-bottom:14px">${list.length} habit${list.length===1?'':'s'} · ${avgConsistency}% average 30-day consistency.</div>
-    ${list.length? `<div class="card" style="margin-bottom:18px;height:${Math.max(120,list.length*32)}px"><canvas id="chart-habits"></canvas></div>` : ''}
+    ${list.length? chartCard('chart-habits', Math.max(120,list.length*32)) : ''}
     ${list.length? list.map(renderHabitReportRow).join('') : `<div class="empty">No habits yet.</div>`}
   `;
 }
@@ -1410,8 +1739,10 @@ function openModal(html){
   qs('#modal-root').innerHTML = `<div class="modal-overlay" data-action="close-modal"><div class="modal">${html}</div></div>`;
 }
 let habitTrendChart = null;
+let projectTrendChart = null;
 function closeModal(){
   if(habitTrendChart){ try{ habitTrendChart.destroy(); }catch(e){} habitTrendChart=null; }
+  if(projectTrendChart){ try{ projectTrendChart.destroy(); }catch(e){} projectTrendChart=null; }
   qs('#modal-root').innerHTML='';
 }
 
@@ -1576,9 +1907,9 @@ function modalAreaDetail(area){
 
 function modalProjectDetail(p){
   const children = tasksOf(p.id);
-  const total = p.subtasks.length + children.length;
-  const done = p.subtasks.filter(s=>s.done).length + children.filter(c=>c.status==='done').length;
-  const pct = total? Math.round(done/total*100) : (p.status==='done'?100:0);
+  const st = projectStats(p);
+  const hist = projectHistory(p, 14);
+  const eff = k=>`<span class="effort-chip" style="cursor:default" title="Effort weight ${(EFFORT[k]||EFFORT[DEFAULT_EFFORT]).weight}">${(EFFORT[k]||EFFORT[DEFAULT_EFFORT]).label}</span>`;
   openModal(`
     <h3>${esc(p.title)}</h3>
     <div class="item-meta" style="margin-bottom:10px">
@@ -1586,21 +1917,65 @@ function modalProjectDetail(p){
       <span class="dot pri-dot pri-${p.priority}"></span><span class="pri-${p.priority}">${p.priority}</span>
       ${p.dueDate?`<span>${fmtDue(p.dueDate)}</span>`:''}
       ${p.assignee?`<span class="chip">👤 ${esc(p.assignee)}</span>`:''}
-      <span>${p.status==='done'?'✅ Done':'In progress'}</span>
+      ${healthChip(st)}
+      ${stalledChip(st)}
     </div>
-    <div class="project-progress-track" style="margin-bottom:4px"><div class="project-progress-fill" style="width:${pct}%"></div></div>
-    <div class="view-sub" style="margin-bottom:16px">${done}/${total||0} done (${pct}%) · created ${fmtHistoryDate(p.createdAt)}</div>
+    ${progressBar(st, 'margin-bottom:8px')}
+    ${st.hasPlan ? `
+      <div class="rollup-grid" style="margin-bottom:12px">
+        <div class="rollup-tile"><div class="v">${st.pct}%</div><div class="k">Complete (weighted)</div></div>
+        <div class="rollup-tile"><div class="v">${st.timePct==null?'—':Math.round(st.timePct)+'%'}</div><div class="k">Time spent</div></div>
+        <div class="rollup-tile"><div class="v" style="color:${st.variance==null?'inherit':st.variance<HEALTH_TRACK_MIN?'var(--c-danger)':st.variance>=HEALTH_AHEAD_MIN?'var(--c-good)':'inherit'}">${st.variance==null?'—':(st.variance>0?'+':'')+st.variance}</div><div class="k">Schedule variance</div></div>
+        <div class="rollup-tile"><div class="v" style="color:${st.daysLeft!=null&&st.daysLeft<0?'var(--c-danger)':'inherit'}">${st.daysLeft==null?'—':st.daysLeft<0?Math.abs(st.daysLeft)+'d late':st.daysLeft+'d'}</div><div class="k">${st.daysLeft!=null&&st.daysLeft<0?'Overdue by':'Days left'}</div></div>
+      </div>
+      <div class="view-sub" style="margin-bottom:16px">
+        ${st.done}/${st.total} steps · ${st.weightDone}/${st.weightTotal} effort points · unweighted this would read ${st.countPct}%.
+        ${st.lastActivityMs? `Last step closed ${st.daysSinceActivity===0?'today':st.daysSinceActivity+'d ago'}.` : 'No step has been closed yet.'}
+        Created ${fmtHistoryDate(p.createdAt)}.
+      </div>
+      ${chartsAvailable()? `<div class="section-label">Completion trend</div>
+      <div style="height:140px;margin-bottom:6px"><canvas id="chart-project-trend"></canvas></div>` : ''}
+      <div class="view-sub" style="margin-bottom:16px">${chartsAvailable()?'Rebuilt from when each step was closed.':''}${hist.undated? ` ${hist.undated} step${hist.undated===1?' was':'s were'} completed before dates were recorded, so ${hist.undated===1?'it counts':'they count'} from the start of the line.`:''}</div>
+    ` : `
+      <div class="view-sub" style="margin-bottom:16px">
+        This project has no milestones and no tasks, so it has <b>no measurable completion</b> — it is not 0% done, it is unmeasured.
+        Break it into steps to give it a percentage, a schedule check, and a place in the portfolio roll-up.
+        Created ${fmtHistoryDate(p.createdAt)}.
+      </div>
+    `}
     <div class="section-label">Milestones</div>
     <ul style="margin:0 0 14px 0;padding:0;list-style:none">
-      ${p.subtasks.map(s=>`<li style="font-size:13.5px;padding:4px 0;${s.done?'text-decoration:line-through;color:var(--c-text-muted)':''}">${s.done?'☑':'☐'} ${esc(s.title)}</li>`).join('') || '<li class="view-sub">None.</li>'}
+      ${p.subtasks.map(s=>`<li style="font-size:13.5px;padding:4px 0;${s.done?'text-decoration:line-through;color:var(--c-text-muted)':''}">${s.done?'☑':'☐'} ${eff(s.effort)} ${esc(s.title)}</li>`).join('') || '<li class="view-sub">None.</li>'}
     </ul>
     <div class="section-label">Tasks</div>
     <ul style="margin:0;padding:0;list-style:none">
-      ${children.map(c=>`<li style="font-size:13.5px;padding:4px 0;${c.status==='done'?'text-decoration:line-through;color:var(--c-text-muted)':''}">${c.status==='done'?'☑':'☐'} ${esc(c.title)}${c.dueDate?` <span style="color:var(--c-text-muted)">(${fmtDue(c.dueDate)})</span>`:''}${c.assignee?` <span style="color:var(--c-text-muted)">— ${esc(c.assignee)}</span>`:''}</li>`).join('') || '<li class="view-sub">None.</li>'}
+      ${children.map(c=>`<li style="font-size:13.5px;padding:4px 0;${c.status==='done'?'text-decoration:line-through;color:var(--c-text-muted)':''}">${c.status==='done'?'☑':'☐'} ${eff(c.effort)} ${esc(c.title)}${c.dueDate?` <span style="color:var(--c-text-muted)">(${fmtDue(c.dueDate)})</span>`:''}${c.assignee?` <span style="color:var(--c-text-muted)">— ${esc(c.assignee)}</span>`:''}</li>`).join('') || '<li class="view-sub">None.</li>'}
     </ul>
     <div class="modal-actions">
+      <button class="btn" data-action="export-project" data-id="${p.id}">Export report</button>
       <button class="btn btn-primary" data-action="close-modal">Close</button>
     </div>`);
+
+  if(projectTrendChart){ try{ projectTrendChart.destroy(); }catch(e){} projectTrendChart=null; }
+  if(st.hasPlan && typeof Chart!=='undefined'){
+    const el = document.getElementById('chart-project-trend');
+    const tc = chartTextColor(), gc = chartGridColor();
+    const sets = [{ label:'Complete', data:hist.points.map(h=>h.pct), borderColor:'#10B981', backgroundColor:'#10B98133', fill:true, tension:.3, pointRadius:2 }];
+    if(st.timePct!=null){
+      // Where the calendar said you should have been at each of those sample dates.
+      const startMs = Date.parse(p.createdAt)||Date.now();
+      const dueMs = endOfDayMs(p.dueDate);
+      sets.push({ label:'Schedule', data:hist.points.map(h=>Math.round(clampPct((h.ms-startMs)/Math.max(1,(dueMs-startMs))*100))),
+        borderColor:'#64748B', borderDash:[5,4], fill:false, tension:0, pointRadius:0 });
+    }
+    if(el) projectTrendChart = new Chart(el, {
+      type:'line',
+      data:{ labels: hist.points.map(h=>h.label), datasets: sets },
+      options:{ responsive:true, maintainAspectRatio:false,
+        scales:{ y:{ min:0, max:100, ticks:{color:tc}, grid:{color:gc} }, x:{ ticks:{color:tc, maxTicksLimit:7}, grid:{display:false} } },
+        plugins:{ legend:{ display:st.timePct!=null, labels:{ color:tc, boxWidth:12, font:{size:11} } } } }
+    });
+  }
 }
 
 function modalHabitDetail(h){
@@ -1715,14 +2090,68 @@ function downloadWordDoc(filename, title, bodyHtml){
   setTimeout(()=>URL.revokeObjectURL(url), 2000);
 }
 function exportProjectReport(p){
-  const children = tasksOf(p.id);
-  const rows = (arr, doneKey)=>arr.map(x=>`<li>${x[doneKey]?'☑':'☐'} ${esc(x.title)}${x.dueDate?` <span class="muted">(due ${esc(x.dueDate)})</span>`:''}</li>`).join('');
+  const st = projectStats(p);
+  const eff = k=>(EFFORT[k]||EFFORT[DEFAULT_EFFORT]).label;
+  const line = u=>`<li>${u.done?'☑':'☐'} [${eff(u.effort)}] ${esc(u.title)}${u.dueDate?` <span class="muted">(due ${esc(u.dueDate)})</span>`:''}${u.done&&u.doneAt?` <span class="muted">— closed ${esc(u.doneAt.slice(0,10))}</span>`:''}</li>`;
+  const milestones = st.units.filter(u=>u.kind==='milestone');
+  const tasks = st.units.filter(u=>u.kind==='task');
+  const summary = st.hasPlan ? `
+    <h2>At a glance</h2>
+    <table cellpadding="6" cellspacing="0" border="1" style="border-collapse:collapse;border-color:#E2E8F0">
+      <tr><td><b>Complete (effort-weighted)</b></td><td>${st.pct}%</td></tr>
+      <tr><td>Unweighted step count</td><td>${st.countPct}% (${st.done} of ${st.total} steps)</td></tr>
+      <tr><td>Effort closed</td><td>${st.weightDone} of ${st.weightTotal} points</td></tr>
+      <tr><td>Schedule spent</td><td>${st.timePct==null?'No due date set':Math.round(st.timePct)+'% of the window'}</td></tr>
+      <tr><td>Schedule variance</td><td>${st.variance==null?'—':(st.variance>0?'+':'')+st.variance+' pts (' + HEALTH_META[st.health].label + ')'}</td></tr>
+      <tr><td>Time remaining</td><td>${st.daysLeft==null?'—':st.daysLeft<0?Math.abs(st.daysLeft)+' days overdue':st.daysLeft+' days left'}</td></tr>
+      <tr><td>Last step closed</td><td>${st.lastActivityMs? st.daysSinceActivity+' days ago'+(st.stalled?' — STALLED':'') : 'No step closed yet'}</td></tr>
+    </table>`
+  : `<h2>At a glance</h2><p><b>No measurable completion.</b> This project has no milestones and no tasks, so it has no percentage — it is unmeasured rather than 0% done, and it is excluded from portfolio roll-ups.</p>`;
   const html = `<h1>${esc(p.title)}</h1>
-    <p class="muted">Domain: ${esc(p.category)} &nbsp;·&nbsp; Priority: ${esc(p.priority)} &nbsp;·&nbsp; Status: ${esc(p.status)}</p>
-    <h2>Milestones</h2><ul>${rows(p.subtasks,'done') || '<li class="muted">None</li>'}</ul>
-    <h2>Tasks</h2><ul>${rows(children.map(c=>({title:c.title,done:c.status==='done',dueDate:c.dueDate})),'done') || '<li class="muted">None</li>'}</ul>`;
+    <p class="muted">Domain: ${esc(p.category)} &nbsp;·&nbsp; Priority: ${esc(p.priority)} &nbsp;·&nbsp; Status: ${esc(p.status)}${p.assignee?` &nbsp;·&nbsp; Owner: ${esc(p.assignee)}`:''}${p.dueDate?` &nbsp;·&nbsp; Due ${esc(p.dueDate)}`:''}</p>
+    <p class="muted">Generated ${new Date().toLocaleDateString(undefined,{year:'numeric',month:'long',day:'numeric'})}</p>
+    ${summary}
+    <h2>Milestones</h2><ul>${milestones.map(line).join('') || '<li class="muted">None</li>'}</ul>
+    <h2>Tasks</h2><ul>${tasks.map(line).join('') || '<li class="muted">None</li>'}</ul>
+    <p class="muted">Effort sizes: S=1, M=2, L=3, XL=5. Weighted completion is closed effort points over total effort points.</p>`;
   downloadWordDoc(`${p.title.replace(/[^a-z0-9]+/gi,'-')}-report.doc`, p.title, html);
   pushToast('Report downloaded');
+}
+
+function exportPortfolioReport(){
+  const list = reportProjectList();
+  const port = portfolioStats(list);
+  const rows = port.rows.slice().sort((a,b)=>HEALTH_ORDER.indexOf(a.st.health)-HEALTH_ORDER.indexOf(b.st.health) || (b.st.weightTotal-a.st.weightTotal));
+  const html = `<h1>Project portfolio</h1>
+    <p class="muted">Generated ${new Date().toLocaleDateString(undefined,{year:'numeric',month:'long',day:'numeric'})} &nbsp;·&nbsp; ${port.total} active project${port.total===1?'':'s'}</p>
+    <h2>At a glance</h2>
+    <table cellpadding="6" cellspacing="0" border="1" style="border-collapse:collapse;border-color:#E2E8F0">
+      <tr><td><b>Weighted completion</b></td><td>${port.weightedPct==null?'—':port.weightedPct+'%'} (${port.weightDone} of ${port.weightTotal} effort points)</td></tr>
+      <tr><td>Average project completion</td><td>${port.simplePct==null?'—':port.simplePct+'%'}</td></tr>
+      <tr><td>Off track (behind / at risk / overdue)</td><td>${port.offTrack}</td></tr>
+      <tr><td>Stalled ${STALL_DAYS}+ days</td><td>${port.stalledCount}</td></tr>
+      <tr><td>Not broken down (unmeasured)</td><td>${port.noPlanCount}</td></tr>
+    </table>
+    <h2>By domain</h2>
+    <table cellpadding="6" cellspacing="0" border="1" style="border-collapse:collapse;border-color:#E2E8F0">
+      <tr><th align="left">Domain</th><th align="right">Projects</th><th align="right">Weighted %</th><th align="right">Effort done</th><th align="right">Off track</th><th align="right">No plan</th></tr>
+      ${port.byArea.map(a=>`<tr><td>${esc(a.area)}</td><td align="right">${a.count}</td><td align="right">${a.pct==null?'—':a.pct+'%'}</td><td align="right">${a.weightDone}/${a.weightTotal||0}</td><td align="right">${a.offTrack}</td><td align="right">${a.noPlan}</td></tr>`).join('')}
+    </table>
+    <h2>Projects</h2>
+    <table cellpadding="6" cellspacing="0" border="1" style="border-collapse:collapse;border-color:#E2E8F0">
+      <tr><th align="left">Project</th><th align="left">Domain</th><th align="right">Complete</th><th align="right">Time spent</th><th align="right">Variance</th><th align="left">Health</th></tr>
+      ${rows.map(r=>`<tr>
+        <td>${esc(r.p.title)}${r.st.stalled?' <span class="muted">(stalled)</span>':''}</td>
+        <td>${esc(r.p.category)}</td>
+        <td align="right">${r.st.hasPlan? r.st.pct+'%' : '—'}</td>
+        <td align="right">${r.st.timePct==null?'—':Math.round(r.st.timePct)+'%'}</td>
+        <td align="right">${r.st.variance==null?'—':(r.st.variance>0?'+':'')+r.st.variance}</td>
+        <td>${HEALTH_META[r.st.health].label}</td>
+      </tr>`).join('')}
+    </table>
+    <p class="muted">Effort sizes: S=1, M=2, L=3, XL=5. Variance is completion % minus the % of each project's time window already spent; negative means behind the calendar. Projects with no milestones or tasks have no percentage and are excluded from the weighted figures.</p>`;
+  downloadWordDoc(`project-portfolio-${todayISO()}.doc`, 'Project portfolio', html);
+  pushToast('Portfolio report downloaded');
 }
 
 /* =========================================================
@@ -1784,6 +2213,21 @@ function handleAction(action, el){
     case 'filter-project': ui.projectFilter = el.getAttribute('data-cat'); render(); break;
     case 'filter-assignee': ui.inboxAssigneeFilter = el.getAttribute('data-assignee'); render(); break;
     case 'reports-tab': ui.reportsTab = el.getAttribute('data-tab'); render(); break;
+    case 'project-health-filter': ui.projectHealthFilter = el.getAttribute('data-health'); render(); break;
+    case 'export-portfolio': exportPortfolioReport(); break;
+    case 'open-portfolio-report': ui.view='reports'; ui.reportsTab='projects'; ui.projectHealthFilter='all'; render(); break;
+    case 'cycle-effort': {
+      const sid = el.getAttribute('data-sub');
+      const owner = byId(id);
+      if(!owner) break;
+      if(sid){
+        const sub = (owner.subtasks||[]).find(x=>x.id===sid);
+        if(sub){ sub.effort = cycleEffort(sub.effort); persist(); }
+      } else {
+        owner.effort = cycleEffort(owner.effort); persist();
+      }
+      break;
+    }
 
     case 'history-range': ui.historyRange = el.getAttribute('data-range'); render(); break;
     case 'history-custom-from': ui.historyCustomFrom = el.value || null; render(); break;
@@ -1862,7 +2306,7 @@ function handleAction(action, el){
       const title = qs('#np-title').value.trim();
       if(title){
         const milestones = qs('#np-milestones').value.split('\n').map(x=>x.trim()).filter(Boolean)
-          .map(t=>({id:uid(), title:t, done:false, xpAwarded:false}));
+          .map(t=>({id:uid(), title:t, done:false, xpAwarded:false, effort:DEFAULT_EFFORT, doneAt:null}));
         newItem({
           title, type:'project', category:qs('#np-cat').value, priority:qs('#np-pri').value,
           dueDate: qs('#np-due').value || null,
@@ -1876,7 +2320,7 @@ function handleAction(action, el){
     case 'add-subtask': {
       const input = qs(`[data-role="new-sub"][data-id="${id}"]`);
       const val = input && input.value.trim();
-      if(val && item){ item.subtasks.push({id:uid(), title:val, done:false, xpAwarded:false}); persist(); }
+      if(val && item){ item.subtasks.push({id:uid(), title:val, done:false, xpAwarded:false, effort:DEFAULT_EFFORT, doneAt:null}); persist(); }
       break;
     }
     case 'toggle-subtask': {
