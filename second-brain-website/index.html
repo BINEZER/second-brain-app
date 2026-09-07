@@ -210,6 +210,19 @@
       .sub-row{display:flex;align-items:center;gap:10px;padding:6px 0;font-size:13.5px}
       .sub-add{display:flex;gap:8px;margin-top:8px}
       .sub-add input{flex:1;padding:7px 10px;border-radius:8px;border:1px solid var(--c-border);background:var(--c-surface);font-size:13px}
+      .rv-step{display:flex;gap:11px;align-items:flex-start;padding:11px 0;border-bottom:1px solid var(--c-border)}
+      .rv-step:last-child{border-bottom:none}
+      .rv-step .box{width:19px;height:19px;border-radius:6px;border:1.5px solid var(--c-border-strong);background:var(--c-surface);flex-shrink:0;margin-top:1px;display:flex;align-items:center;justify-content:center;font-size:12px;color:#fff;cursor:pointer}
+      .rv-step .box.on{background:var(--c-good);border-color:var(--c-good)}
+      .rv-step.done .rv-what{text-decoration:line-through;color:var(--c-text-muted)}
+      .rv-body{flex:1;min-width:0;cursor:pointer}
+      .rv-what{font-size:14px;font-weight:600}
+      .rv-why{font-size:12.5px;color:var(--c-text-muted);margin-top:2px}
+      .rv-where{display:inline-block;font-family:'JetBrains Mono',monospace;font-size:10.5px;letter-spacing:.04em;text-transform:uppercase;color:var(--c-text-secondary);background:var(--c-surface-alt);border:1px solid var(--c-border);border-radius:5px;padding:1px 6px;margin-top:5px}
+      .rv-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:8px}
+      .clickable-title{cursor:pointer;text-decoration:underline;text-decoration-color:transparent;text-underline-offset:3px;transition:text-decoration-color .15s}
+      .clickable-title:hover{text-decoration-color:var(--c-border-strong)}
+      .parent-chip{font-size:11.5px;color:var(--c-text-muted)}
       .row-tools{display:inline-flex;gap:2px;flex-shrink:0}
       .row-tools .icon-btn{padding:2px 5px;font-size:12px;line-height:1.1}
       .icon-btn[disabled]{opacity:.25;cursor:not-allowed}
@@ -221,6 +234,9 @@
       .dom-row{display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--c-border);flex-wrap:wrap}
       .dom-row:last-child{border-bottom:none}
       .dom-row .dom-name{flex:1;min-width:140px;font-size:13.5px;font-weight:600}
+      .frow2{display:grid;grid-template-columns:110px minmax(0,1fr);gap:12px;padding:7px 0;border-bottom:1px dotted var(--c-border);font-size:13.5px}
+      .frow2:last-child{border-bottom:none}
+      .fk2{font-size:11px;letter-spacing:.05em;text-transform:uppercase;color:var(--c-text-muted);padding-top:2px}
       .dom-row .dom-count{font-family:'JetBrains Mono',monospace;font-size:11.5px;color:var(--c-text-muted);white-space:nowrap}
       .list-num{font-family:'JetBrains Mono',monospace;font-size:11.5px;font-weight:600;color:var(--c-text-muted);font-variant-numeric:tabular-nums;min-width:22px;text-align:right;flex-shrink:0;padding-top:2px}
       .import-box{width:100%;min-height:130px;padding:11px 13px;border-radius:10px;border:1px solid var(--c-border);background:var(--c-surface-alt);color:var(--c-text);font-family:'JetBrains Mono',monospace;font-size:11.5px;line-height:1.55;resize:vertical}
@@ -310,6 +326,32 @@ const AREA_MIGRATION_MAP = {
 };
 const XP_TASK = 10, XP_MILESTONE = 25, XP_HABITS = 15;
 
+/* Review checklists. Deliberately outside the XP system — ticking these awards
+   nothing, so a review is never something you do for points. */
+const REVIEW_DAILY = [
+  ['Read today\u2019s date and your three focus items', 'If any of the three is not what today is actually about, unpin it now.', 'Now / Today'],
+  ['Log yesterday\u2019s habits', 'Anything you forgot to tick. Use \u2039 to step back a week if the day has rolled over.', 'Habits'],
+  ['Empty your head into the capture box', 'Everything on your mind, one line each. Do not organise while capturing.', 'Inbox'],
+  ['Process the unfiled inbox to zero', 'File, convert to a project, date it, or delete. Do not leave it half done.', 'Inbox \u2192 Process Inbox'],
+  ['Scan for anything due or overdue today', 'Search or scan the list; anything overdue either gets done today or gets a new date.', 'Inbox \u2192 All open tasks'],
+  ['Open the finance app', 'Log yesterday\u2019s spending and check the account balances while it is still fresh.', 'Finance app'],
+  ['Pin tomorrow\u2019s three', 'Decide before you close the laptop, so tomorrow starts already decided.', 'Now / Today']
+];
+const REVIEW_WEEKLY = [
+  ['Read the portfolio roll-up', 'Weighted completion, off track, stalled, not broken down. One number for the whole book of work.', 'Reports \u2192 Projects'],
+  ['Work the off-track list', 'For each one: is it genuinely behind, or does it just need a start date set to when work actually began?', 'Reports \u2192 Projects \u2192 Off track'],
+  ['Work the stalled list', 'Nothing closed in 14+ days. Either take one step this week or move the project to Later and archive it.', 'Reports \u2192 Projects \u2192 Stalled'],
+  ['Break down anything unmeasured', 'Projects with no milestones have no percentage and hide from every roll-up.', 'Reports \u2192 Projects \u2192 No plan'],
+  ['Check each domain', 'IntelMotion, Nigist, Tamar, home, personal. Any domain that went quiet all week is telling you something.', 'Reports \u2192 Life Areas'],
+  ['Re-size milestones that turned out wrong', 'Anything that took a week when you called it Small. The sizes are only useful if they stay honest.', 'Projects'],
+  ['Review habit consistency', 'Retire what you are genuinely not doing rather than letting it sit at 20%.', 'Reports \u2192 Habits'],
+  ['Clear the inbox to zero', 'The weekly backstop for anything the daily pass missed.', 'Inbox \u2192 Process Inbox'],
+  ['Read the open items in each life area', 'The Binder holds commitments that never became tasks.', 'Life Binder'],
+  ['Finance app: weekly reconciliation', 'Categorise the week, reconcile against the accounts, and check the month against budget.', 'Finance app'],
+  ['Set next week\u2019s three focus items', 'Choose them now, while you have the whole picture in front of you.', 'Now / Today'],
+  ['Export the portfolio report', 'Only if you are reporting to Demitu or reviewing with the family businesses this week.', 'Reports \u2192 Export']
+];
+
 /* Effort weighting — a step's size, so a 3-week survey doesn't count the same as a phone call. */
 const EFFORT_ORDER = ['S','M','L','XL'];
 const EFFORT = {
@@ -397,6 +439,7 @@ function defaultRoot(){
       settings: { nowPins: [], themeMode: matchMedia('(prefers-color-scheme: dark)').matches ? 'dark':'light' },
       lifeAreas: [],
       habits: [],
+      reviews: { daily:{}, weekly:{} },
       gamification: { xp:0, habitBonusDates:[] }
     }
   };
@@ -449,6 +492,10 @@ function loadRoot(){
     if(h.frequency.type==='days' && !Array.isArray(h.frequency.days)) h.frequency.days=[0,1,2,3,4,5,6];
     if(h.frequency.type==='weekly' && !h.frequency.target) h.frequency.target=3;
   });
+  // Review ticks live outside gamification on purpose: they never award XP.
+  st.reviews = st.reviews || {};
+  if(typeof st.reviews.daily!=='object' || !st.reviews.daily) st.reviews.daily = {};
+  if(typeof st.reviews.weekly!=='object' || !st.reviews.weekly) st.reviews.weekly = {};
   st.gamification = st.gamification || {};
   if(typeof st.gamification.xp!=='number') st.gamification.xp=0;
   if(!Array.isArray(st.gamification.habitBonusDates)) st.gamification.habitBonusDates=[];
@@ -581,6 +628,7 @@ const ui = {
   sidebarCollapsed: false,
   processInbox: false,
   triageIndex: 0,
+  triageLastCat: null,        // domain last filed to during Process Inbox
   projectFilter: 'all',     // life area filter for Projects view
   expandedProjects: new Set(),
   showArchived: false,
@@ -590,10 +638,13 @@ const ui = {
   historyCustomTo: null,
   historyWeekOffset: 0,       // weeks back from current, for the Reports habit-history pager
   reportsTab: 'areas',        // areas | projects | habits | timeline
+  reviewTab: 'daily',         // daily | weekly
   projectHealthFilter: 'all', // all | offtrack | stalled | noplan — Reports > Projects
   projectSearch: '',          // free-text filter on the Projects tab
   reportsSearch: '',          // free-text filter on Reports > Projects
   inboxSearch: '',            // free-text filter on the Inbox
+  inboxScope: 'all',          // all | unfiled | project | standalone — what the Inbox lists
+  inboxProject: 'all',        // narrow to one project's steps
   habitWeekOffset: 0,         // weeks back on the Habits tab, so a missed weekend is reachable
   showInactiveHabits: false,  // reveal retired habits
   importText: '',             // Settings > Import — raw pasted JSON
@@ -1050,6 +1101,7 @@ function renderSidebar(){
     ${navItem('binder', icon('binder'), 'Life Binder')}
     ${navItem('habits', icon('habit'), 'Habits')}
     ${navItem('reports', icon('reports'), 'Reports')}
+    ${navItem('review', icon('now'), 'Review')}
     <div class="nav-divider"></div>
     <div class="nav-group-label">More</div>
     ${navItem('followups', icon('follow'), 'Follow-ups', followups().length||'')}
@@ -1112,6 +1164,7 @@ function renderView(){
     case 'habits': return renderHabitsView();
     case 'followups': return renderFollowupsView();
     case 'reports': return renderReportsView();
+    case 'review': return renderReviewView();
     case 'settings': return renderSettingsView();
     default: return renderNowView();
   }
@@ -1162,7 +1215,7 @@ function renderFocusCard(it, num){
     <button class="check ${it.status==='done'?'done':''}" data-action="complete" data-id="${it.id}">${checkSvg()}</button>
     <div class="focus-num" style="margin-left:-2px">${num}</div>
     <div class="item-main">
-      <div class="focus-title ${it.status==='done'?'item-title done':''}">${esc(it.title)}</div>
+      <div class="focus-title clickable-title ${it.status==='done'?'item-title done':''}" data-action="open-item" data-id="${it.id}" title="Where does this come from?">${esc(it.title)}</div>
       ${renderMeta(it)}
     </div>
     <div class="item-actions">
@@ -1175,7 +1228,7 @@ function renderPipelineRow(it, i){
   return `<div class="pipeline-row">
     ${numLabel(i)}
     <span class="dot pri-dot pri-${it.priority}"></span>
-    <div class="item-main"><div class="item-title">${esc(it.title)}</div>${renderMeta(it)}</div>
+    <div class="item-main"><div class="item-title clickable-title" data-action="open-item" data-id="${it.id}" title="Where does this come from?">${esc(it.title)}</div>${renderMeta(it)}</div>
     <button class="btn btn-sm" data-action="toggle-pin" data-id="${it.id}">+ Now</button>
   </div>`;
 }
@@ -1183,6 +1236,9 @@ function renderPipelineRow(it, i){
 function renderMeta(it){
   const bits=[];
   bits.push(`<span class="chip" style="${catStyle(it.category)}">${esc(it.category)}</span>`);
+  const parent = it.projectId ? byId(it.projectId) : null;
+  if(parent) bits.push(`<span class="parent-chip">📁 ${esc(parent.title)}</span>`);
+  else if(it.type==='task') bits.push(`<span class="parent-chip">standalone</span>`);
   if(it.assignee) bits.push(`<span class="chip">👤 ${esc(it.assignee)}</span>`);
   if(it.dueDate) bits.push(`<span style="${isOverdue(it)?'color:var(--c-danger);font-weight:700':''}">${fmtDue(it.dueDate)}</span>`);
   if(it.isStarred) bits.push('⭐');
@@ -1241,30 +1297,61 @@ function renderHabitStrip(compact, weekOffset){
 }
 
 /* ---------- INBOX ---------- */
+/* Every open task, wherever it lives — the Inbox is the one place to see them all.
+   "Unfiled" is the classic inbox and is what Process Inbox works through. */
+function allOpenTasks(){ return items().filter(i=>i.type==='task' && i.status==='open'); }
+function inboxScoped(){
+  const t = allOpenTasks();
+  if(ui.inboxScope==='unfiled')     return t.filter(i=>i.category==='Inbox');
+  if(ui.inboxScope==='project')     return t.filter(i=>i.projectId);
+  if(ui.inboxScope==='standalone')  return t.filter(i=>!i.projectId && i.category!=='Inbox');
+  return t;
+}
+
 function renderInboxView(){
-  const all = inboxItems();
-  const assignees = Array.from(new Set(all.filter(i=>i.assignee).map(i=>i.assignee))).sort();
+  const unfiled = inboxItems();
+  const all = inboxScoped();
+  const projList = projects();
+  const assignees = Array.from(new Set(allOpenTasks().filter(i=>i.assignee).map(i=>i.assignee))).sort();
   let list = ui.inboxAssigneeFilter==='all' ? all : all.filter(i=>i.assignee===ui.inboxAssigneeFilter);
-  if(ui.inboxSearch) list = list.filter(i=>matchesSearch(i.title, ui.inboxSearch) || matchesSearch(i.assignee, ui.inboxSearch));
+  if(ui.inboxProject!=='all') list = list.filter(i=>i.projectId===ui.inboxProject);
+  if(ui.inboxSearch) list = list.filter(i=>matchesSearch(i.title, ui.inboxSearch)
+    || matchesSearch(i.assignee, ui.inboxSearch)
+    || matchesSearch(i.category, ui.inboxSearch)
+    || (i.projectId && matchesSearch((byId(i.projectId)||{}).title, ui.inboxSearch)));
   return `<div class="view">
     <div class="view-head">
-      <div><div class="view-title">Inbox</div><div class="view-sub">Raw thoughts &amp; single-step tasks. Decide fast, don't organize here.</div></div>
-      <button class="btn btn-primary" data-action="process-inbox">Process Inbox (${all.length})</button>
+      <div><div class="view-title">Inbox</div><div class="view-sub">Every open task, wherever it lives. Capture here, then process the unfiled ones.</div></div>
+      <button class="btn btn-primary" data-action="process-inbox">Process Inbox (${unfiled.length})</button>
     </div>
     <div class="capture">
       <input id="capture-input" type="text" placeholder="Capture a thought or task… (Enter to add)" data-action-enter="capture-add" />
       <button class="btn btn-primary" data-action="capture-add">Add</button>
     </div>
+    <div class="chip-row">
+      ${[['all','All open tasks',allOpenTasks().length],
+         ['unfiled','Unfiled',unfiled.length],
+         ['project','In a project',allOpenTasks().filter(i=>i.projectId).length],
+         ['standalone','Standalone',allOpenTasks().filter(i=>!i.projectId && i.category!=='Inbox').length]
+        ].map(([k,label,n])=>`<button class="chip ${ui.inboxScope===k?'on':''}" data-action="inbox-scope" data-scope="${k}">${label} (${n})</button>`).join('')}
+    </div>
     <div class="filter-bar">
-      ${searchBox('inbox-search', ui.inboxSearch, 'Search the inbox…')}
+      ${searchBox('inbox-search', ui.inboxSearch, 'Search tasks, projects, domains, owners…')}
       ${ui.inboxSearch? `<button class="btn btn-sm" data-action="clear-inbox-search">Clear</button>`:''}
+      ${projList.length? `<select data-action-change="inbox-project" style="font-size:13px;padding:7px 9px;border-radius:10px;border:1px solid var(--c-border);background:var(--c-surface);color:var(--c-text)">
+        <option value="all" ${ui.inboxProject==='all'?'selected':''}>Any project</option>
+        ${projList.map(pr=>`<option value="${esc(pr.id)}" ${ui.inboxProject===pr.id?'selected':''}>${esc(pr.title)}</option>`).join('')}
+      </select>`:''}
     </div>
     ${assignees.length? `<div class="chip-row">
       <button class="chip ${ui.inboxAssigneeFilter==='all'?'on':''}" data-action="filter-assignee" data-assignee="all">All</button>
       ${assignees.map(a=>`<button class="chip ${ui.inboxAssigneeFilter===a?'on':''}" data-action="filter-assignee" data-assignee="${esc(a)}">👤 ${esc(a)}</button>`).join('')}
     </div>` : ''}
     ${(inboxViewLen = list.length, '')}
-    ${list.length? list.map((it,i)=>renderInboxRow(it,i)).join('') : (all.length? `<div class="empty">${ui.inboxSearch? 'Nothing matches that search.' : `No items assigned to ${esc(ui.inboxAssigneeFilter)}.`}</div>` : `<div class="empty">Inbox zero 🎉 — nothing waiting to be triaged.</div>`)}
+    ${list.length? list.map((it,i)=>renderInboxRow(it,i)).join('')
+      : `<div class="empty">${ui.inboxSearch? 'Nothing matches that search.'
+          : ui.inboxScope==='unfiled'? 'Inbox zero 🎉 — nothing waiting to be triaged.'
+          : 'Nothing here yet.'}</div>`}
   </div>`;
 }
 
@@ -1275,8 +1362,8 @@ function renderInboxRow(it, i){
     ${numLabel(i)}
     <button class="check ${it.status==='done'?'done':''}" data-action="complete" data-id="${it.id}">${checkSvg()}</button>
     <div class="item-main">
-      <div class="item-title">${esc(it.title)}</div>
-      <div class="item-meta"><span class="dot pri-dot pri-${it.priority}"></span><span class="pri-${it.priority}">${it.priority}</span>${it.assignee?`<span class="chip">👤 ${esc(it.assignee)}</span>`:''}</div>
+      <div class="item-title clickable-title" data-action="open-item" data-id="${it.id}" title="Where does this come from?">${esc(it.title)}</div>
+      ${renderMeta(it)}
     </div>
     <div class="item-actions">
       ${moveTools('move-inbox', it.id, i, inboxViewLen)}
@@ -1300,13 +1387,20 @@ function renderProcessInbox(){
   }
   if(ui.triageIndex>=list.length) ui.triageIndex=0;
   const it = list[ui.triageIndex];
+  const areas = state.state.lifeAreas;
+  // Remember the last domain filed to — consecutive items usually belong together.
+  const lastCat = areas.some(a=>a.name===ui.triageLastCat) ? ui.triageLastCat : (areas[0]&&areas[0].name);
   return `<div class="view"><div class="triage-wrap">
     <div class="triage-progress">Processing ${ui.triageIndex+1} of ${list.length}</div>
     <div class="triage-card">
       <div class="triage-title">${esc(it.title)}</div>
+      ${areas.length? `<div class="field" style="margin:14px 0 4px;text-align:left">
+        <label>File it under</label>
+        <select id="triage-cat">${areas.map(a=>`<option value="${esc(a.name)}" ${a.name===lastCat?'selected':''}>${esc(a.name)}</option>`).join('')}</select>
+      </div>` : `<div class="view-sub" style="margin:12px 0">No life areas yet — add one under Manage domains on the Projects tab, then filing will work.</div>`}
       <div class="triage-actions">
-        <button class="btn" data-action="triage-keep-task">✅ Keep as task</button>
-        <button class="btn" data-action="triage-to-project">📁 It's a project</button>
+        <button class="btn" data-action="triage-keep-task" ${areas.length?'':'disabled'}>✅ Keep as task</button>
+        <button class="btn" data-action="triage-to-project" ${areas.length?'':'disabled'}>📁 It's a project</button>
         <button class="btn" data-action="triage-snooze">🗓 Set due date</button>
         <button class="btn btn-danger" data-action="triage-delete">🗑 Delete</button>
         <button class="btn btn-ghost full" data-action="triage-skip">Skip →</button>
@@ -1440,6 +1534,65 @@ function renderProjectBody(p, children){
       <input type="text" placeholder="Add a task under this project…" data-role="new-child" data-id="${p.id}" data-action-enter="add-child-task" />
       <button class="btn btn-sm" data-action="add-child-task" data-id="${p.id}">Add</button>
     </div>
+  </div>`;
+}
+
+/* ---------- REVIEW ---------- */
+function reviewPeriodKey(kind){
+  return kind==='daily' ? todayISO() : fmtISO(startOfWeek(new Date()));
+}
+function reviewTicks(kind){
+  const store = state.state.reviews[kind] || (state.state.reviews[kind] = {});
+  const key = reviewPeriodKey(kind);
+  // Only the current period is kept — a new day or week starts clean.
+  if(store.key !== key){ store.key = key; store.done = {}; }
+  if(!store.done) store.done = {};
+  return store;
+}
+function renderReviewList(kind, steps){
+  const store = reviewTicks(kind);
+  const doneCount = steps.filter((_,i)=>store.done[i]).length;
+  const pct = steps.length? Math.round(doneCount/steps.length*100) : 0;
+  return `<div class="card" style="margin-bottom:20px">
+    <div class="rv-head">
+      <div>
+        <div style="font-weight:600;font-size:15px">${kind==='daily'?'Daily pass':'Weekly review'}</div>
+        <div class="view-sub" style="margin-top:2px">${kind==='daily'
+          ? 'Five to ten minutes, same order every day.'
+          : `Thirty to forty minutes, once a week. Resets every Monday.`}</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px">
+        <span class="view-sub" style="margin:0;font-family:'JetBrains Mono',monospace">${doneCount}/${steps.length}</span>
+        ${doneCount? `<button class="btn btn-sm" data-action="review-reset" data-kind="${kind}">Reset</button>`:''}
+      </div>
+    </div>
+    <div class="project-progress-track" style="margin-bottom:6px"><div class="project-progress-fill" style="width:${pct}%"></div></div>
+    ${steps.map(([what,why,where],i)=>`
+      <div class="rv-step ${store.done[i]?'done':''}">
+        <div class="box ${store.done[i]?'on':''}" data-action="review-tick" data-kind="${kind}" data-i="${i}">${store.done[i]?'✓':''}</div>
+        <div class="rv-body" data-action="review-tick" data-kind="${kind}" data-i="${i}">
+          <div class="rv-what">${esc(what)}</div>
+          <div class="rv-why">${esc(why)}</div>
+          <span class="rv-where">${esc(where)}</span>
+        </div>
+      </div>`).join('')}
+  </div>`;
+}
+function renderReviewView(){
+  const d = reviewTicks('daily'), w = reviewTicks('weekly');
+  const dDone = REVIEW_DAILY.filter((_,i)=>d.done[i]).length;
+  const wDone = REVIEW_WEEKLY.filter((_,i)=>w.done[i]).length;
+  return `<div class="view">
+    <div class="view-head">
+      <div><div class="view-title">Review</div><div class="view-sub">What to do when you open Second Brain — daily and weekly. Ticking these earns no XP; it is a checklist, not a game.</div></div>
+      ${renderTodayStamp()}
+    </div>
+    <div class="chip-row">
+      <button class="chip ${ui.reviewTab==='daily'?'on':''}" data-action="review-tab" data-tab="daily">Daily (${dDone}/${REVIEW_DAILY.length})</button>
+      <button class="chip ${ui.reviewTab==='weekly'?'on':''}" data-action="review-tab" data-tab="weekly">Weekly (${wDone}/${REVIEW_WEEKLY.length})</button>
+    </div>
+    ${ui.reviewTab==='weekly' ? renderReviewList('weekly', REVIEW_WEEKLY) : renderReviewList('daily', REVIEW_DAILY)}
+    <div class="view-sub">The daily list clears at midnight, the weekly one every Monday. Nothing here touches your XP, level or streak.</div>
   </div>`;
 }
 
@@ -2154,6 +2307,40 @@ function mergeLifeArea(fromName, intoName){
   return true;
 }
 
+/* Where did this come from? Answers it for any item, and offers a jump to its home. */
+function modalItemDetail(it){
+  const parent = it.projectId ? byId(it.projectId) : null;
+  const st = parent ? projectStats(parent) : null;
+  const pinned = nowPins().indexOf(it.id)>=0;
+  const row = (k,v)=>`<div class="frow2"><span class="fk2">${k}</span><span>${v}</span></div>`;
+  openModal(`
+    <h3>${esc(it.title)}</h3>
+    <div class="item-meta" style="margin-bottom:12px">
+      <span class="chip" style="${catStyle(it.category)}">${esc(it.category)}</span>
+      <span class="dot pri-dot pri-${it.priority}"></span><span class="pri-${it.priority}">${it.priority}</span>
+      ${it.isStarred?'<span>⭐ starred</span>':''}
+      ${pinned?'<span>📌 pinned to Now</span>':''}
+    </div>
+    <div style="display:grid;gap:0;margin-bottom:14px">
+      ${row('Comes from', parent
+        ? `a step in <b>${esc(parent.title)}</b>${st&&st.hasPlan?` — that project is ${st.pct}% done`:''}`
+        : it.category==='Inbox' ? 'the Inbox — not filed to a domain yet'
+        : `a standalone ${it.type} in <b>${esc(it.category)}</b>, not part of any project`)}
+      ${row('Type', it.type==='project'?'Project':it.type==='followup'?'Follow-up':'Task')}
+      ${row('Effort', `${(EFFORT[it.effort]||EFFORT[DEFAULT_EFFORT]).label} — ${esc((EFFORT[it.effort]||EFFORT[DEFAULT_EFFORT]).title)}`)}
+      ${row('Due', it.dueDate? `${fmtDue(it.dueDate)} (${esc(it.dueDate)})` : 'No due date')}
+      ${it.assignee? row('Owner', esc(it.assignee)) : ''}
+      ${row('Added', fmtHistoryDate(it.createdAt))}
+      ${it.status==='done'&&it.completedAt? row('Completed', fmtHistoryDate(it.completedAt)) : ''}
+    </div>
+    <div class="modal-actions">
+      ${parent? `<button class="btn" data-action="goto-project" data-id="${parent.id}">Open ${esc(parent.title)}</button>`
+              : `<button class="btn" data-action="goto-inbox" data-id="${it.id}">Show in ${it.category==='Inbox'?'Inbox':'its list'}</button>`}
+      <button class="btn" data-action="open-editor" data-id="${it.id}">Edit</button>
+      <button class="btn btn-primary" data-action="close-modal">Close</button>
+    </div>`);
+}
+
 function modalRenameSubtask(p, sub){
   openModal(`
     <h3>Rename milestone</h3>
@@ -2689,6 +2876,21 @@ function handleAction(action, el){
     case 'filter-project': ui.projectFilter = el.getAttribute('data-cat'); render(); break;
     case 'filter-assignee': ui.inboxAssigneeFilter = el.getAttribute('data-assignee'); render(); break;
     case 'reports-tab': ui.reportsTab = el.getAttribute('data-tab'); render(); break;
+    case 'review-tab': ui.reviewTab = el.getAttribute('data-tab'); render(); break;
+    case 'review-tick': {
+      // No grantXP call here, by design.
+      const kind = el.getAttribute('data-kind'), i = el.getAttribute('data-i');
+      const store = reviewTicks(kind);
+      if(store.done[i]) delete store.done[i]; else store.done[i] = true;
+      persist();
+      break;
+    }
+    case 'review-reset': {
+      const store = reviewTicks(el.getAttribute('data-kind'));
+      store.done = {};
+      persist();
+      break;
+    }
     case 'project-health-filter': ui.projectHealthFilter = el.getAttribute('data-health'); render(); break;
     case 'export-portfolio': exportPortfolioReport(); break;
     case 'export-report': {
@@ -2716,6 +2918,27 @@ function handleAction(action, el){
       break;
     }
     case 'open-portfolio-report': ui.view='reports'; ui.reportsTab='projects'; ui.projectHealthFilter='all'; render(); break;
+    case 'open-item': if(item) modalItemDetail(item); break;
+    case 'goto-project': {
+      closeModal();
+      const proj = byId(id);
+      if(proj){
+        ui.view='projects'; ui.projectFilter='all'; ui.projectSearch=''; ui.showArchived=true;
+        ui.expandedProjects.add(proj.id);
+      }
+      render();
+      // Bring the project into view rather than leaving them to hunt for it.
+      setTimeout(()=>{ const el=qs(`.project-card [data-id="${cssEscape(id)}"]`); if(el&&el.scrollIntoView) el.scrollIntoView({block:'center'}); },50);
+      break;
+    }
+    case 'goto-inbox': {
+      closeModal();
+      const it2 = byId(id);
+      ui.view='inbox'; ui.inboxSearch=''; ui.inboxAssigneeFilter='all';
+      ui.inboxScope = (it2 && it2.category==='Inbox') ? 'unfiled' : 'all';
+      render();
+      break;
+    }
     case 'manage-domains': modalManageDomains(); break;
     case 'add-domain': {
       const input = qs('#new-domain');
@@ -2783,9 +3006,12 @@ function handleAction(action, el){
       break;
     }
     case 'move-inbox': {
-      let view = inboxItems();
+      let view = inboxScoped();
       if(ui.inboxAssigneeFilter!=='all') view = view.filter(i=>i.assignee===ui.inboxAssigneeFilter);
-      if(ui.inboxSearch) view = view.filter(i=>matchesSearch(i.title, ui.inboxSearch) || matchesSearch(i.assignee, ui.inboxSearch));
+      if(ui.inboxProject!=='all') view = view.filter(i=>i.projectId===ui.inboxProject);
+      if(ui.inboxSearch) view = view.filter(i=>matchesSearch(i.title, ui.inboxSearch)
+        || matchesSearch(i.assignee, ui.inboxSearch) || matchesSearch(i.category, ui.inboxSearch)
+        || (i.projectId && matchesSearch((byId(i.projectId)||{}).title, ui.inboxSearch)));
       if(reorderItemsBy(view, +el.getAttribute('data-i'), +el.getAttribute('data-dir'))) persist();
       break;
     }
@@ -2795,6 +3021,8 @@ function handleAction(action, el){
     case 'clear-project-search': ui.projectSearch=''; render(); break;
     case 'inbox-search-changed': ui.inboxSearch = el.value; render(); break;
     case 'clear-inbox-search': ui.inboxSearch=''; render(); break;
+    case 'inbox-scope': ui.inboxScope = el.getAttribute('data-scope'); render(); break;
+    case 'inbox-project': ui.inboxProject = el.value; render(); break;
     case 'move-subtask': {
       const proj = byId(id);
       if(proj && moveInArray(proj.subtasks, +el.getAttribute('data-i'), +el.getAttribute('data-dir'))) persist();
@@ -2996,8 +3224,14 @@ function handleAction(action, el){
 
     case 'triage-keep-task': {
       const list = inboxItems(); const it = list[ui.triageIndex];
-      if(it){ it.category = state.state.lifeAreas.some(a=>a.name==='Personal / Self') ? 'Personal / Self' : 'Inbox'; }
-      persist(); render(); break;
+      const sel = qs('#triage-cat');
+      const cat = sel && sel.value;
+      if(!it) break;
+      if(!cat){ pushToast('Add a life area first — Projects → Manage domains'); break; }
+      it.category = cat;
+      ui.triageLastCat = cat;
+      pushToast(`"${it.title}" filed under ${cat}`);
+      persist(); break;
     }
     case 'triage-to-project': {
       const list = inboxItems(); const it = list[ui.triageIndex];
@@ -3010,13 +3244,21 @@ function handleAction(action, el){
       break;
     }
     case 'confirm-snooze': {
-      if(item){ item.dueDate = qs('#sn-date').value || null; closeModal(); persist(); render(); }
+      if(item){
+        item.dueDate = qs('#sn-date').value || null;
+        closeModal();
+        pushToast(item.dueDate? `Due ${fmtDue(item.dueDate)} — still in the Inbox to file` : 'Due date cleared');
+        // A date alone does not file the item, so move on to the next card rather than
+        // sitting on one that looks unchanged.
+        if(ui.processInbox){ const l = inboxItems(); ui.triageIndex = (ui.triageIndex+1) % Math.max(1,l.length); }
+        persist();
+      }
       break;
     }
     case 'triage-delete': {
       const list = inboxItems(); const it = list[ui.triageIndex];
-      if(it) deleteItem(it.id);
-      persist(); render(); break;
+      if(it){ pushToast(`"${it.title}" deleted`); deleteItem(it.id); }
+      persist(); break;
     }
     case 'triage-skip': {
       const list = inboxItems();
