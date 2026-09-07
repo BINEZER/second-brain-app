@@ -219,6 +219,9 @@
       .rv-what{font-size:14px;font-weight:600}
       .rv-why{font-size:12.5px;color:var(--c-text-muted);margin-top:2px}
       .rv-where{display:inline-block;font-family:'JetBrains Mono',monospace;font-size:10.5px;letter-spacing:.04em;text-transform:uppercase;color:var(--c-text-secondary);background:var(--c-surface-alt);border:1px solid var(--c-border);border-radius:5px;padding:1px 6px;margin-top:5px}
+      .rv-sec{display:flex;align-items:baseline;justify-content:space-between;gap:10px;margin:16px 0 2px;padding-top:12px;border-top:1px solid var(--c-border-strong);font-size:11px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--c-text-secondary)}
+      .rv-sec:first-of-type{border-top:none;padding-top:6px;margin-top:8px}
+      .rv-sec-count{font-family:'JetBrains Mono',monospace;font-weight:600;color:var(--c-text-muted);letter-spacing:0}
       .rv-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:8px}
       .clickable-title{cursor:pointer;text-decoration:underline;text-decoration-color:transparent;text-underline-offset:3px;transition:text-decoration-color .15s}
       .clickable-title:hover{text-decoration-color:var(--c-border-strong)}
@@ -327,30 +330,91 @@ const AREA_MIGRATION_MAP = {
 const XP_TASK = 10, XP_MILESTONE = 25, XP_HABITS = 15;
 
 /* Review checklists. Deliberately outside the XP system — ticking these awards
-   nothing, so a review is never something you do for points. */
-const REVIEW_DAILY = [
-  ['Read today\u2019s date and your three focus items', 'If any of the three is not what today is actually about, unpin it now.', 'Now / Today'],
-  ['Log yesterday\u2019s habits', 'Anything you forgot to tick. Use \u2039 to step back a week if the day has rolled over.', 'Habits'],
-  ['Empty your head into the capture box', 'Everything on your mind, one line each. Do not organise while capturing.', 'Inbox'],
-  ['Process the unfiled inbox to zero', 'File, convert to a project, date it, or delete. Do not leave it half done.', 'Inbox \u2192 Process Inbox'],
-  ['Scan for anything due or overdue today', 'Search or scan the list; anything overdue either gets done today or gets a new date.', 'Inbox \u2192 All open tasks'],
-  ['Open the finance app', 'Log yesterday\u2019s spending and check the account balances while it is still fresh.', 'Finance app'],
-  ['Pin tomorrow\u2019s three', 'Decide before you close the laptop, so tomorrow starts already decided.', 'Now / Today']
-];
-const REVIEW_WEEKLY = [
-  ['Read the portfolio roll-up', 'Weighted completion, off track, stalled, not broken down. One number for the whole book of work.', 'Reports \u2192 Projects'],
-  ['Work the off-track list', 'For each one: is it genuinely behind, or does it just need a start date set to when work actually began?', 'Reports \u2192 Projects \u2192 Off track'],
-  ['Work the stalled list', 'Nothing closed in 14+ days. Either take one step this week or move the project to Later and archive it.', 'Reports \u2192 Projects \u2192 Stalled'],
-  ['Break down anything unmeasured', 'Projects with no milestones have no percentage and hide from every roll-up.', 'Reports \u2192 Projects \u2192 No plan'],
-  ['Check each domain', 'IntelMotion, Nigist, Tamar, home, personal. Any domain that went quiet all week is telling you something.', 'Reports \u2192 Life Areas'],
-  ['Re-size milestones that turned out wrong', 'Anything that took a week when you called it Small. The sizes are only useful if they stay honest.', 'Projects'],
-  ['Review habit consistency', 'Retire what you are genuinely not doing rather than letting it sit at 20%.', 'Reports \u2192 Habits'],
-  ['Clear the inbox to zero', 'The weekly backstop for anything the daily pass missed.', 'Inbox \u2192 Process Inbox'],
-  ['Read the open items in each life area', 'The Binder holds commitments that never became tasks.', 'Life Binder'],
-  ['Finance app: weekly reconciliation', 'Categorise the week, reconcile against the accounts, and check the month against budget.', 'Finance app'],
-  ['Set next week\u2019s three focus items', 'Choose them now, while you have the whole picture in front of you.', 'Now / Today'],
-  ['Export the portfolio report', 'Only if you are reporting to Demitu or reviewing with the family businesses this week.', 'Reports \u2192 Export']
-];
+   nothing, so a review is never something you do for points.
+
+   Each list is split into sections so the Second Brain pass and the finance
+   pass read as separate blocks rather than one long run of checkboxes.
+   Steps are ordered highest-value first: if a review gets cut short, the
+   part that was skipped is the part that mattered least. */
+const REVIEW_LISTS = {
+  daily: {
+    label: 'Daily pass',
+    blurb: 'Ten to fifteen minutes, same order every day.',
+    resets: 'clears at midnight',
+    sections: [
+      { name: 'Second Brain', steps: [
+        ['Read today’s date and your three focus items', 'If any of the three is not what today is actually about, unpin it now.', 'Now / Today'],
+        ['Log yesterday’s habits', 'Anything you forgot to tick. Use ‹ to step back a week if the day has rolled over.', 'Habits'],
+        ['Tick off what you actually finished', 'Percentages, the Done log and your streak are only true if you close things when they close.', 'Projects / Inbox'],
+        ['Empty your head into the capture box', 'Everything on your mind, one line each. Do not organise while capturing.', 'Inbox'],
+        ['Process the unfiled inbox to zero', 'File it, convert it to a project, date it, or delete it. Do not leave it half done.', 'Inbox → Process Inbox'],
+        ['Scan for anything due or overdue today', 'Anything overdue either gets done today or gets an honest new date.', 'Inbox → All open tasks'],
+        ['Pin tomorrow’s three', 'Decide before you close the laptop, so tomorrow starts already decided.', 'Now / Today']
+      ]},
+      { name: 'Finance', steps: [
+        ['Log yesterday’s transactions — card and cash', 'Cash is what vanishes. A day old you remember it; three days old you do not.', 'Finance app'],
+        ['Clear the uncategorised queue', 'Two minutes a day, or an hour on Sunday.', 'Finance app'],
+        ['Check the balances against what you expect', 'A number you cannot explain is fraud, a forgotten subscription, or a transfer you did not record.', 'Finance app']
+      ]}
+    ]
+  },
+  weekly: {
+    label: 'Weekly review',
+    blurb: 'Forty minutes to an hour, once a week. The real one.',
+    resets: 'resets every Monday',
+    sections: [
+      { name: 'Second Brain', steps: [
+        ['Read the portfolio roll-up', 'Weighted completion, off track, stalled, not broken down. One number for the whole book of work.', 'Reports → Projects'],
+        ['Work the off-track list', 'For each: genuinely behind, or does it just need a start date set to when work actually began?', 'Reports → Projects → Off track'],
+        ['Work the stalled list', 'Nothing closed in 14+ days. Take a step this week, or move it to Later and archive it.', 'Reports → Projects → Stalled'],
+        ['Break down anything unmeasured', 'Projects with no milestones have no percentage and hide from every roll-up.', 'Reports → Projects → No plan'],
+        ['Read the completed-work timeline', 'How much actually closed this week against the weeks before it. Velocity, not feelings.', 'Reports → Timeline'],
+        ['Check each domain', 'IntelMotion, Nigist, Tamar, home, personal. A domain that went quiet all week is telling you something.', 'Reports → Life Areas'],
+        ['Re-size milestones that turned out wrong', 'Anything that took a week when you called it Small. The sizes are only useful if they stay honest.', 'Projects'],
+        ['Review habit consistency', 'Retire what you are genuinely not doing rather than letting it sit at 20%.', 'Reports → Habits'],
+        ['Work the follow-ups list', 'Anyone you have not contacted in too long — site engineers, counterparts, the family businesses.', 'Follow-ups'],
+        ['Clear the inbox to zero', 'The weekly backstop for anything the daily pass missed.', 'Inbox → Process Inbox'],
+        ['Read the open items in each life area', 'The Binder holds commitments that never became tasks.', 'Life Binder'],
+        ['Set next week’s three focus items', 'Choose them now, while the whole picture is in front of you.', 'Now / Today'],
+        ['Export the portfolio report', 'Only if you are reporting to Demitu or reviewing with the family businesses this week.', 'Reports → Export']
+      ]},
+      { name: 'Finance', steps: [
+        ['Reconcile every account against the bank', 'The ledger has to agree with reality, or nothing downstream is true.', 'Finance app'],
+        ['Read the week by category against budget', 'Not just the total — which categories overran, and whether it was a decision or a drift.', 'Finance app'],
+        ['Separate anything business from personal', 'IntelMotion, Nigist or Tamar money that ran through a personal account gets moved or recorded now.', 'Finance app'],
+        ['Chase what is owed to you', 'Consulting fees, reimbursements, family-business payments.', 'Finance app'],
+        ['Look fourteen days ahead', 'Bills, school fees, standing orders — anything needing cash positioned in advance.', 'Finance app'],
+        ['Check the ETB / USD position', 'A week’s move on a balance that matters is worth knowing before it becomes a surprise.', 'Finance app'],
+        ['Move money to savings and update the targets', 'Emergency reserve and the housing fund, so Housing Decision & Readiness reflects a real number.', 'Finance app → Second Brain']
+      ]}
+    ]
+  },
+  monthly: {
+    label: 'Monthly close',
+    blurb: 'An hour, first weekend of the month. The one that catches drift.',
+    resets: 'resets on the 1st',
+    sections: [
+      { name: 'Finance', steps: [
+        ['Take a net worth snapshot', 'One number, same day each month. The trend matters more than the level.', 'Finance app'],
+        ['Audit every subscription', 'Cancel what you did not use this month. They only ever accumulate.', 'Finance app'],
+        ['Read the whole month against budget', 'The week view hides seasonality; the month does not.', 'Finance app'],
+        ['Check the Nigist and Tamar records are current', 'Current and separate from personal is what makes the formalisation work possible later.', 'Finance app / business records'],
+        ['Reset next month’s budget and savings targets', 'Adjust to what actually happened, not to what you hoped would.', 'Finance app']
+      ]},
+      { name: 'Second Brain', steps: [
+        ['Re-read the horizons', 'What should move from Later to Next, and what should honestly drop off altogether.', 'Projects'],
+        ['Compare this month’s portfolio number to last', 'Weighted completion month over month is the only real progress signal.', 'Reports → Projects'],
+        ['Re-read each area’s purpose and guiding principle', 'The Binder is the layer that stops the task list becoming the whole point.', 'Life Binder'],
+        ['Prune what will never happen', 'Delete or archive it. A backlog you do not believe is noise in every roll-up.', 'Projects']
+      ]}
+    ]
+  }
+};
+function reviewSteps(kind){
+  const out = [];
+  (REVIEW_LISTS[kind].sections||[]).forEach((sec,si)=>sec.steps.forEach((st,i)=>out.push({sec:sec.name, si, i, key:`s${si}i${i}`, st})));
+  return out;
+}
 
 /* Effort weighting — a step's size, so a 3-week survey doesn't count the same as a phone call. */
 const EFFORT_ORDER = ['S','M','L','XL'];
@@ -439,7 +503,7 @@ function defaultRoot(){
       settings: { nowPins: [], themeMode: matchMedia('(prefers-color-scheme: dark)').matches ? 'dark':'light' },
       lifeAreas: [],
       habits: [],
-      reviews: { daily:{}, weekly:{} },
+      reviews: { daily:{}, weekly:{}, monthly:{} },
       gamification: { xp:0, habitBonusDates:[] }
     }
   };
@@ -494,8 +558,7 @@ function loadRoot(){
   });
   // Review ticks live outside gamification on purpose: they never award XP.
   st.reviews = st.reviews || {};
-  if(typeof st.reviews.daily!=='object' || !st.reviews.daily) st.reviews.daily = {};
-  if(typeof st.reviews.weekly!=='object' || !st.reviews.weekly) st.reviews.weekly = {};
+  ['daily','weekly','monthly'].forEach(k=>{ if(typeof st.reviews[k]!=='object' || !st.reviews[k]) st.reviews[k] = {}; });
   st.gamification = st.gamification || {};
   if(typeof st.gamification.xp!=='number') st.gamification.xp=0;
   if(!Array.isArray(st.gamification.habitBonusDates)) st.gamification.habitBonusDates=[];
@@ -638,7 +701,7 @@ const ui = {
   historyCustomTo: null,
   historyWeekOffset: 0,       // weeks back from current, for the Reports habit-history pager
   reportsTab: 'areas',        // areas | projects | habits | timeline
-  reviewTab: 'daily',         // daily | weekly
+  reviewTab: 'daily',         // daily | weekly | monthly
   projectHealthFilter: 'all', // all | offtrack | stalled | noplan — Reports > Projects
   projectSearch: '',          // free-text filter on the Projects tab
   reportsSearch: '',          // free-text filter on Reports > Projects
@@ -1539,7 +1602,9 @@ function renderProjectBody(p, children){
 
 /* ---------- REVIEW ---------- */
 function reviewPeriodKey(kind){
-  return kind==='daily' ? todayISO() : fmtISO(startOfWeek(new Date()));
+  if(kind==='daily')   return todayISO();
+  if(kind==='monthly') return todayISO().slice(0,7);      // YYYY-MM
+  return fmtISO(startOfWeek(new Date()));                  // Monday of this week
 }
 function reviewTicks(kind){
   const store = state.state.reviews[kind] || (state.state.reviews[kind] = {});
@@ -1549,50 +1614,63 @@ function reviewTicks(kind){
   if(!store.done) store.done = {};
   return store;
 }
-function renderReviewList(kind, steps){
+function renderReviewList(kind){
+  const list = REVIEW_LISTS[kind];
   const store = reviewTicks(kind);
-  const doneCount = steps.filter((_,i)=>store.done[i]).length;
-  const pct = steps.length? Math.round(doneCount/steps.length*100) : 0;
+  const all = reviewSteps(kind);
+  const doneCount = all.filter(x=>store.done[x.key]).length;
+  const pct = all.length? Math.round(doneCount/all.length*100) : 0;
   return `<div class="card" style="margin-bottom:20px">
     <div class="rv-head">
       <div>
-        <div style="font-weight:600;font-size:15px">${kind==='daily'?'Daily pass':'Weekly review'}</div>
-        <div class="view-sub" style="margin-top:2px">${kind==='daily'
-          ? 'Five to ten minutes, same order every day.'
-          : `Thirty to forty minutes, once a week. Resets every Monday.`}</div>
+        <div style="font-weight:600;font-size:15px">${esc(list.label)}</div>
+        <div class="view-sub" style="margin-top:2px">${esc(list.blurb)} ${esc(list.resets.charAt(0).toUpperCase()+list.resets.slice(1))}.</div>
       </div>
       <div style="display:flex;align-items:center;gap:10px">
-        <span class="view-sub" style="margin:0;font-family:'JetBrains Mono',monospace">${doneCount}/${steps.length}</span>
+        <span class="view-sub" style="margin:0;font-family:'JetBrains Mono',monospace">${doneCount}/${all.length}</span>
         ${doneCount? `<button class="btn btn-sm" data-action="review-reset" data-kind="${kind}">Reset</button>`:''}
       </div>
     </div>
-    <div class="project-progress-track" style="margin-bottom:6px"><div class="project-progress-fill" style="width:${pct}%"></div></div>
-    ${steps.map(([what,why,where],i)=>`
-      <div class="rv-step ${store.done[i]?'done':''}">
-        <div class="box ${store.done[i]?'on':''}" data-action="review-tick" data-kind="${kind}" data-i="${i}">${store.done[i]?'✓':''}</div>
-        <div class="rv-body" data-action="review-tick" data-kind="${kind}" data-i="${i}">
-          <div class="rv-what">${esc(what)}</div>
-          <div class="rv-why">${esc(why)}</div>
-          <span class="rv-where">${esc(where)}</span>
-        </div>
-      </div>`).join('')}
+    <div class="project-progress-track" style="margin-bottom:4px"><div class="project-progress-fill" style="width:${pct}%"></div></div>
+    ${list.sections.map((sec,si)=>{
+      const mine = all.filter(x=>x.si===si);
+      const secDone = mine.filter(x=>store.done[x.key]).length;
+      return `<div class="rv-sec">
+        <span>${esc(sec.name)}</span>
+        <span class="rv-sec-count">${secDone}/${mine.length}</span>
+      </div>
+      ${mine.map(x=>{
+        const [what,why,where] = x.st;
+        const on = !!store.done[x.key];
+        return `<div class="rv-step ${on?'done':''}">
+          <div class="box ${on?'on':''}" data-action="review-tick" data-kind="${kind}" data-key="${x.key}">${on?'✓':''}</div>
+          <div class="rv-body" data-action="review-tick" data-kind="${kind}" data-key="${x.key}">
+            <div class="rv-what">${esc(what)}</div>
+            <div class="rv-why">${esc(why)}</div>
+            <span class="rv-where">${esc(where)}</span>
+          </div>
+        </div>`;
+      }).join('')}`;
+    }).join('')}
   </div>`;
 }
 function renderReviewView(){
-  const d = reviewTicks('daily'), w = reviewTicks('weekly');
-  const dDone = REVIEW_DAILY.filter((_,i)=>d.done[i]).length;
-  const wDone = REVIEW_WEEKLY.filter((_,i)=>w.done[i]).length;
+  const kinds = ['daily','weekly','monthly'];
+  const tab = kinds.indexOf(ui.reviewTab)>=0 ? ui.reviewTab : 'daily';
   return `<div class="view">
     <div class="view-head">
-      <div><div class="view-title">Review</div><div class="view-sub">What to do when you open Second Brain — daily and weekly. Ticking these earns no XP; it is a checklist, not a game.</div></div>
+      <div><div class="view-title">Review</div><div class="view-sub">What to do when you open Second Brain, and what to do in the finance app. Ticking these earns no XP — it is a checklist, not a game.</div></div>
       ${renderTodayStamp()}
     </div>
     <div class="chip-row">
-      <button class="chip ${ui.reviewTab==='daily'?'on':''}" data-action="review-tab" data-tab="daily">Daily (${dDone}/${REVIEW_DAILY.length})</button>
-      <button class="chip ${ui.reviewTab==='weekly'?'on':''}" data-action="review-tab" data-tab="weekly">Weekly (${wDone}/${REVIEW_WEEKLY.length})</button>
+      ${kinds.map(k=>{
+        const store = reviewTicks(k), all = reviewSteps(k);
+        const done = all.filter(x=>store.done[x.key]).length;
+        return `<button class="chip ${tab===k?'on':''}" data-action="review-tab" data-tab="${k}">${esc(REVIEW_LISTS[k].label)} (${done}/${all.length})</button>`;
+      }).join('')}
     </div>
-    ${ui.reviewTab==='weekly' ? renderReviewList('weekly', REVIEW_WEEKLY) : renderReviewList('daily', REVIEW_DAILY)}
-    <div class="view-sub">The daily list clears at midnight, the weekly one every Monday. Nothing here touches your XP, level or streak.</div>
+    ${renderReviewList(tab)}
+    <div class="view-sub">Daily clears at midnight, weekly every Monday, monthly on the 1st. Steps are ordered highest-value first, so a review cut short loses the least. Nothing here touches your XP, level or streak.</div>
   </div>`;
 }
 
@@ -2879,9 +2957,9 @@ function handleAction(action, el){
     case 'review-tab': ui.reviewTab = el.getAttribute('data-tab'); render(); break;
     case 'review-tick': {
       // No grantXP call here, by design.
-      const kind = el.getAttribute('data-kind'), i = el.getAttribute('data-i');
+      const kind = el.getAttribute('data-kind'), key = el.getAttribute('data-key');
       const store = reviewTicks(kind);
-      if(store.done[i]) delete store.done[i]; else store.done[i] = true;
+      if(store.done[key]) delete store.done[key]; else store.done[key] = true;
       persist();
       break;
     }
