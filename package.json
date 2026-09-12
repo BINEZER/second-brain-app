@@ -1,0 +1,14 @@
+{
+  "name": "second-brain-app",
+  "private": true,
+  "description": "Personal Second Brain — a single-file app served by Firebase Hosting.",
+  "scripts": {
+    "test": "node tests/syntax.test.js && node tests/analytics.test.js && node tests/import.test.js",
+    "test:ui": "node tests/ui.test.js",
+    "test:all": "npm test && npm run test:ui",
+    "serve": "node serve.js"
+  },
+  "devDependencies": {
+    "playwright": "1.56.1"
+  }
+}

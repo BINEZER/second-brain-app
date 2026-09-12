@@ -1,0 +1,78 @@
+{
+  "_comment": "Synthetic fixture for the import tests. Deliberately generic — no real project, client or business data belongs in this repo.",
+  "version": 1,
+  "lifeAreas": ["Operations", "Trading", "Home"],
+  "projects": [
+    {
+      "title": "Site installation",
+      "category": "Operations",
+      "priority": "high",
+      "startDate": "2026-01-05",
+      "dueDate": "2026-06-30",
+      "assignee": "Site engineer",
+      "starred": true,
+      "archived": false,
+      "milestones": [
+        {"title": "Site survey", "effort": "S"},
+        {"title": "Procurement", "effort": "M"},
+        {"title": "Delivery to site", "effort": "M"},
+        {"title": "Mechanical installation", "effort": "XL"},
+        {"title": "Electrical installation", "effort": "L"},
+        {"title": "Testing and commissioning", "effort": "L"},
+        {"title": "Handover", "effort": "M"}
+      ],
+      "tasks": [
+        {"title": "Order the rails", "effort": "M", "dueDate": "2026-02-01", "priority": "high"},
+        {"title": "Confirm the crane slot", "effort": "S", "dueDate": null, "priority": "medium"}
+      ]
+    },
+    {
+      "title": "Export licence",
+      "category": "Trading",
+      "priority": "medium",
+      "startDate": null,
+      "dueDate": null,
+      "assignee": null,
+      "starred": false,
+      "archived": false,
+      "milestones": [
+        {"title": "Gather the paperwork", "effort": "L"},
+        {"title": "Submit the application", "effort": "XL"},
+        {"title": "Collect the certificate", "effort": "M"}
+      ],
+      "tasks": []
+    },
+    {
+      "title": "Kitchen refit",
+      "category": "Home",
+      "priority": "low",
+      "startDate": null,
+      "dueDate": null,
+      "assignee": null,
+      "starred": false,
+      "archived": true,
+      "milestones": [
+        {"title": "Measure up", "effort": "S"},
+        {"title": "Get three quotes", "effort": "S"}
+      ],
+      "tasks": []
+    },
+    {
+      "title": "Unplanned idea",
+      "category": "Home",
+      "priority": "medium",
+      "startDate": null,
+      "dueDate": null,
+      "assignee": null,
+      "starred": false,
+      "archived": false,
+      "milestones": [],
+      "tasks": []
+    }
+  ],
+  "habits": [
+    {"name": "Morning walk", "emoji": "🚶", "category": "Home", "frequency": {"type": "daily"}},
+    {"name": "Strength session", "emoji": "🏋", "category": "Home", "frequency": {"type": "weekly", "target": 4}},
+    {"name": "Desk tidy", "emoji": "🧹", "category": "Operations", "frequency": {"type": "days", "days": [0,1,2,3,4]}}
+  ]
+}
