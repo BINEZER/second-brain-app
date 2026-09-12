@@ -30,7 +30,20 @@ Everything runs automatically on every pull request (`.github/workflows/test.yml
 | `import.test.js` | Parsing, the preview plan, applying it, idempotent re-import, and every malformed-input path. |
 | `ui.test.js` | The flows that have broken before: Process Inbox actually filing, milestone rename/delete/reorder, habit retire and the week pager, exports on all four report tabs, and that review ticks award no XP. |
 
-## Two things to know before editing
+## The browser suite never touches the live database
+
+`index.html` loads the Firebase SDK from a CDN and, once it has it, connects to
+the real Firestore project — and `persist()` writes the whole state to
+`snapshots/primary`. A browser test with network access would therefore
+overwrite real data with fixtures.
+
+`ui.test.js` blocks every request that is not the local server, and asserts
+both that the guard fired and that no external response was ever received.
+Do not relax that block. It is also what keeps the suite deterministic: with
+the SDK loaded, the Firestore connection never goes idle, so
+`waitUntil: 'networkidle'` hangs until it times out.
+
+## Three things to know before editing
 
 **No real data.** `fixtures/sample-import.json` and every name in these tests are
 deliberately generic. Business, client and family names do not belong in this
@@ -40,3 +53,8 @@ repository.
 exactly on a boundary — variance of precisely −25, say — passes in the morning
 and fails in the evening, because hours of elapsed time move it across. Choose
 windows that sit clearly inside the band you are asserting.
+
+**Assert the property, not the bookkeeping.** An early version of the network
+check asserted that no blocked URL matched `firestore` — but the blocked list is
+exactly where those URLs belong, so it failed while the guard was working
+perfectly. Check what the page actually received, not what the test recorded.

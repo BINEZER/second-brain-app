@@ -56,15 +56,42 @@ async function launch() {
   const browser = await launch();
   const page = await browser.newPage({ viewport: { width: 1400, height: 1100 } });
   const errs = [];
-  // Firebase is CDN-loaded and absent offline; that is expected and not a regression.
+  // Firebase is CDN-loaded; without it `db` is undefined, which the app handles.
   page.on('pageerror', e => { if (!/firebase|db is not defined/.test(e.message)) errs.push(e.message); });
   page.on('dialog', d => d.accept());
 
+  /*
+    Hard-block every request that is not the local server.
+
+    This is a safety rule, not a convenience. index.html loads the Firebase SDK
+    from gstatic and connects to the live Firestore project; persist() then
+    writes the whole state to snapshots/primary. A test run with real network
+    access would overwrite the owner's real data with fixtures. Blocking here
+    makes that impossible rather than unlikely.
+
+    It also fixes a CI hang: the Firestore connection never goes idle, so
+    waitUntil:'networkidle' waits forever on a runner that has internet.
+  */
+  const blocked = [];   // requests the guard aborted
+  const served = [];    // responses the page actually received
+  await page.route('**/*', route => {
+    const url = route.request().url();
+    if (url.startsWith(BASE) || url.startsWith('data:') || url.startsWith('blob:')) return route.continue();
+    blocked.push(url);
+    return route.abort();
+  });
+  page.on('response', r => served.push(r.url()));
+
   const st = () => page.evaluate(() => JSON.parse(localStorage.getItem('adhd-second-brain-v1')).state);
 
-  await page.goto(BASE, { waitUntil: 'networkidle', timeout: 60000 });
+  // domcontentloaded, not networkidle: nothing external is allowed to load anyway,
+  // and the app renders from localStorage on first paint.
+  await page.goto(BASE, { waitUntil: 'domcontentloaded', timeout: 60000 });
   await page.waitForSelector('.sidebar');
   ok('app boots', true);
+  // Assert the guard is engaged, not merely that the page happened not to ask:
+  // the Firebase SDK request must appear in the blocked list.
+  ok('the Firebase SDK request was blocked', blocked.some(u => /gstatic\.com\/firebasejs/.test(u)), blocked.slice(0, 4));
 
   console.log('\nIMPORT');
   await page.click('[data-action="nav"][data-view="settings"]');
@@ -161,11 +188,18 @@ async function launch() {
   ok('a tick awards no XP', (await st()).gamification.xp === xpBefore, { before: xpBefore, after: (await st()).gamification.xp });
 
   console.log('\nPERSISTENCE');
-  await page.reload({ waitUntil: 'networkidle' });
+  await page.reload({ waitUntil: 'domcontentloaded' });
   await page.click('[data-action="nav"][data-view="review"]');
   await page.waitForTimeout(400);
   ok('state survives a reload', Object.keys((await st()).reviews.daily.done || {}).length === 1);
 
+  // The property that matters: nothing outside the local server was ever served,
+  // so the owner's live Firestore cannot have been read or written.
+  const external = served.filter(u => !u.startsWith(BASE) && !u.startsWith('data:') && !u.startsWith('blob:'));
+  ok('no external response was ever received', external.length === 0, external.slice(0, 5));
+  ok('the live database was never reached', !served.some(u => /firestore|googleapis\.com/.test(u)),
+    served.filter(u => /firestore|googleapis\.com/.test(u)).slice(0, 3));
+  console.log(`blocked ${blocked.length} external request(s) — expected: the Firebase SDK, Chart.js and web fonts`);
   console.log('\nconsole errors: ' + (errs.length ? JSON.stringify(errs) : 'none'));
   errs.forEach(() => fails++);
   console.log(fails ? `\nui: ${fails} CHECK(S) FAILED` : '\nui: all checks passed');
