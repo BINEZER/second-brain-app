@@ -350,7 +350,7 @@ async function launch() {
     ['weekly wins', /three wins from this week/i],
     ['what did not happen', /did not happen, and why/i],
     ['the deep brain dump', /deep brain dump/i],
-    ['repeat breakdowns', /repeat breakdowns by lift/i],
+    ['repeat breakdowns', /repeat breakdowns, and anything still open/i],
     ['Zipana and IntelTech', /Zipana and IntelTech/i]
   ]) ok('weekly covers ' + label, re.test(wkText));
 
