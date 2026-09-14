@@ -220,6 +220,23 @@ async function launch() {
   const hb1 = await page.evaluate(() => [...document.querySelectorAll('.habit-row')].map(r => r.innerText.split('\n')[0]));
   ok('habits reorder by drag', hb1[2] === hb0[0], { before: hb0, after: hb1 });
 
+  console.log('\nINBOX SCOPES — a filter must never hide what it labels');
+  await page.click('[data-action="nav"][data-view="inbox"]');
+  await page.click('[data-action="inbox-scope"][data-scope="unfiled"]');
+  await page.waitForTimeout(300);
+  const unfiledRows = await page.locator('.item-row').count();
+  ok('captured tasks are chipped standalone AND unfiled',
+    /standalone · unfiled/.test(await page.locator('.item-row').first().innerText()));
+  await page.click('[data-action="inbox-scope"][data-scope="standalone"]');
+  await page.waitForTimeout(300);
+  /* Standalone used to require a domain, so a task chipped "standalone" on its own
+     row disappeared from the Standalone scope. Unfiled is a subset of Standalone. */
+  ok('everything Unfiled also appears under Standalone',
+    await page.locator('.item-row').count() >= unfiledRows,
+    { unfiled: unfiledRows, standalone: await page.locator('.item-row').count() });
+  await page.click('[data-action="inbox-scope"][data-scope="all"]');
+  await page.waitForTimeout(300);
+
   console.log('\nMILESTONES — rename, delete, reorder');
   await page.click('[data-action="nav"][data-view="projects"]');
   await page.locator('.project-card', { hasText: 'Site installation' }).locator('.project-head').click();
@@ -318,6 +335,82 @@ async function launch() {
   await page.click('.modal-actions [data-action="close-modal"]');
   await page.waitForTimeout(200);
 
+  console.log('\nRECURRING — missed cycles stack, and each is a real task');
+  await page.click('[data-action="nav"][data-view="recurring"]');
+  await page.waitForTimeout(300);
+  await page.click('[data-action="new-recurrence"]');
+  await page.waitForSelector('#rc-title');
+  await page.fill('#rc-title', 'File VAT return');
+  await page.selectOption('#rc-type', 'monthly');
+  await page.waitForTimeout(200);
+  ok('monthly shows a day-of-month and hides the weekday chips',
+    await page.locator('#rc-dom-wrap').isVisible() && !(await page.locator('#rc-days-wrap').isVisible()));
+  await page.fill('#rc-dom', '15');
+  const backdate = new Date();
+  backdate.setMonth(backdate.getMonth() - 4);
+  await page.fill('#rc-anchor', backdate.toISOString().slice(0, 10));
+  await page.selectOption('#rc-pri', 'high');
+  await page.click('[data-action="save-recurrence"]');
+  await page.waitForTimeout(700);
+  const vat = (await st()).items.filter(i => i.title === 'File VAT return');
+  // The owner chose stacking: four missed filings are four debts, not one.
+  ok('four months back-dated produces four separate tasks', vat.length === 4, vat.map(i => i.dueDate));
+  ok('each carries its own due date', new Set(vat.map(i => i.dueDate)).size === vat.length);
+  ok('the template\'s priority carries to every instance', vat.every(i => i.priority === 'high'));
+
+  await page.click('[data-action="nav"][data-view="inbox"]');
+  await page.click('[data-action="inbox-scope"][data-scope="recurring"]');
+  await page.waitForTimeout(300);
+  ok('the Recurring scope lists them', await page.locator('.item-row').count() === 4,
+    await page.locator('.item-row').count());
+  ok('a row names its cadence', /Monthly on the 15th/.test(await page.locator('.item-row').first().innerText()));
+  // Closing one instance must not disturb the others.
+  await page.locator('.item-row .check').first().click();
+  await page.waitForTimeout(500);
+  ok('completing one leaves the rest standing',
+    (await st()).items.filter(i => i.title === 'File VAT return' && i.status === 'open').length === 3);
+
+  await page.click('[data-action="nav"][data-view="recurring"]');
+  await page.waitForTimeout(300);
+  await page.locator('.item-row').first().locator('[data-action="toggle-recurrence-pause"]').click();
+  await page.waitForTimeout(400);
+  ok('a series can be paused', (await st()).recurring[0].paused === true);
+  await page.locator('.item-row').first().locator('[data-action="toggle-recurrence-pause"]').click();
+  await page.waitForTimeout(400);
+  ok('  and resumed', (await st()).recurring[0].paused === false);
+  // Deleting the cadence must not delete the work it already created.
+  await page.locator('.item-row').first().locator('[data-action="delete-recurrence"]').click();
+  await page.waitForTimeout(500);
+  ok('deleting the cadence keeps its existing tasks',
+    (await st()).recurring.length === 0 && (await st()).items.filter(i => i.title === 'File VAT return').length === 4);
+
+  // Reloading must not re-create what already exists.
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.waitForTimeout(800);
+  ok('a reload never duplicates instances',
+    (await st()).items.filter(i => i.title === 'File VAT return').length === 4);
+
+  console.log('\nHABITS — a monthly cadence');
+  await page.click('[data-action="nav"][data-view="habits"]');
+  await page.waitForTimeout(300);
+  await page.click('[data-action="add-habit"]');
+  await page.waitForSelector('#habit-name');
+  await page.fill('#habit-name', 'Net worth snapshot');
+  await page.selectOption('#hb-freq-type', 'monthly');
+  await page.waitForTimeout(250);
+  ok('the target field relabels for months', /per month/i.test(await page.locator('#hb-freq-target-label').innerText()));
+  await page.fill('#hb-freq-target', '2');
+  await page.click('[data-action="confirm-add-habit"]');
+  await page.waitForTimeout(500);
+  const mh = (await st()).habits.find(h => h.name === 'Net worth snapshot');
+  ok('a monthly habit saves its target', mh && mh.frequency.type === 'monthly' && mh.frequency.target === 2,
+    mh && mh.frequency);
+  const mhRow = page.locator('.habit-row').filter({ hasText: 'Net worth' });
+  ok('the row shows month-to-date progress', /x\/mo/.test(await mhRow.innerText()));
+  await mhRow.locator('.day-dot').nth(0).click();
+  await page.waitForTimeout(400);
+  ok('  and counts a tick toward the month', /1 this month/.test(await mhRow.innerText()));
+
   console.log('\nREVIEW — checklists must never award XP');
   await page.click('[data-action="nav"][data-view="review"]');
   await page.waitForSelector('.rv-step');
@@ -368,11 +461,49 @@ async function launch() {
   await page.click('[data-action="review-tab"][data-tab="daily"]');
   await page.waitForTimeout(300);
 
+  console.log('\nREVIEW — the owner can edit the list');
+  const baseSteps = await page.locator('.rv-step').count();
+  await page.click('[data-action="add-review-step"][data-kind="daily"]');
+  await page.waitForSelector('#rv-what');
+  await page.fill('#rv-what', 'Call the Nigist bookkeeper');
+  await page.fill('#rv-why', 'Records go stale in a week.');
+  await page.fill('#rv-where', 'Phone');
+  await page.click('[data-action="save-review-step"]');
+  await page.waitForTimeout(500);
+  ok('a custom step is added', await page.locator('.rv-step').count() === baseSteps + 1);
+  ok('  in its own section', /your own steps/i.test(await page.locator('.view').innerText()));
+  const xpPre = (await st()).gamification.xp;
+  await page.locator('.rv-step').last().locator('.box').click();
+  await page.waitForTimeout(400);
+  ok('a custom step awards no XP either', (await st()).gamification.xp === xpPre,
+    { before: xpPre, after: (await st()).gamification.xp });
+  // Hiding a built-in must be reversible — its wording lives in code, not in saved state.
+  await page.locator('.rv-step').first().locator('[data-action="hide-review-step"]').click();
+  await page.waitForTimeout(500);
+  ok('a built-in step can be hidden', await page.locator('.rv-step').count() === baseSteps);
+  await page.click('[data-action="restore-review-steps"]');
+  await page.waitForSelector('.modal');
+  await page.click('.modal [data-action="restore-review-step"]');
+  await page.waitForTimeout(500);
+  ok('  and restored', await page.locator('.rv-step').count() === baseSteps + 1);
+  await page.locator('.rv-step').last().locator('[data-action="edit-review-step"]').click();
+  await page.waitForSelector('#rv-what');
+  await page.fill('#rv-what', 'Call the Nigist accountant');
+  await page.click('[data-action="save-review-step"]');
+  await page.waitForTimeout(500);
+  ok('a custom step can be edited', /Nigist accountant/.test(await page.locator('.view').innerText()));
+  await page.locator('.rv-step').last().locator('[data-action="delete-review-step"]').click();
+  await page.waitForTimeout(500);
+  ok('  and deleted', await page.locator('.rv-step').count() === baseSteps);
+
   console.log('\nPERSISTENCE');
   await page.reload({ waitUntil: 'domcontentloaded' });
   await page.click('[data-action="nav"][data-view="review"]');
   await page.waitForTimeout(400);
-  ok('state survives a reload', Object.keys((await st()).reviews.daily.done || {}).length === 1);
+  const persisted = Object.keys((await st()).reviews.daily.done || {}).length;
+  ok('review ticks survive a reload', persisted === 1, persisted);
+  ok('recurring series survive a reload', (await st()).recurring.length === 0 && (await st()).items.some(i => i.seriesId));
+  ok('a monthly habit survives a reload', ((await st()).habits.find(h => h.name === 'Net worth snapshot') || {}).frequency.type === 'monthly');
 
   // The property that matters: nothing outside the local server was ever served,
   // so the owner's live Firestore cannot have been read or written.

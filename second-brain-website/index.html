@@ -207,6 +207,12 @@
       .rollup-tile .k{font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--c-text-muted);margin-top:5px}
       /* Drag to reorder. touch-action:none on the handle stops the browser
          scrolling the page instead of letting the pointer drag the row. */
+      /* Review-step tools stay out of the way until the row is hovered, so the
+         checklist reads as a checklist and not as an editor. */
+      .rv-foot{display:flex;gap:8px;flex-wrap:wrap;padding-top:12px}
+      .rv-step .rv-tools{opacity:0;transition:opacity .12s;flex-shrink:0}
+      .rv-step:hover .rv-tools,.rv-step .rv-tools:focus-within{opacity:1}
+      @media (hover:none){ .rv-step .rv-tools{opacity:1} }
       .drag-handle{width:26px;height:26px;border-radius:8px;border:1px solid transparent;background:transparent;
         color:var(--c-text-muted);font-size:14px;line-height:1;cursor:grab;touch-action:none;flex-shrink:0}
       .drag-handle:hover{background:var(--c-surface-alt);border-color:var(--c-border);color:var(--c-text-secondary)}
@@ -483,10 +489,37 @@ function reviewKey(secName, stepTitle){
   for(let i=0;i<str.length;i++) h = ((h*33) ^ str.charCodeAt(i)) >>> 0;
   return 'k' + h.toString(36);
 }
+const REVIEW_MINE = 'Your own steps';   // the section holding steps the owner wrote
+function reviewCustom(kind){ return state.state.reviewCustom[kind]; }
+function reviewHidden(kind){ return state.state.reviewHidden[kind]; }
+function isReviewHidden(kind, key){ return reviewHidden(kind).indexOf(key)>=0; }
+
+/* The sections actually shown for a cadence: the built-ins minus anything hidden,
+   plus the owner's own steps as a final section. A hidden built-in is only hidden —
+   un-hide it and its wording comes back from the code, never from saved state. */
+function reviewSections(kind){
+  const out = (REVIEW_LISTS[kind].sections||[]).map(sec=>({
+    name: sec.name, builtin: true,
+    steps: sec.steps.filter(st=>!isReviewHidden(kind, reviewKey(sec.name, st[0])))
+  })).filter(sec=>sec.steps.length);
+  const mine = reviewCustom(kind);
+  if(mine.length) out.push({ name: REVIEW_MINE, builtin:false, steps: mine.map(c=>[c.what, c.why, c.where]) });
+  return out;
+}
 function reviewSteps(kind){
   const out = [];
-  (REVIEW_LISTS[kind].sections||[]).forEach((sec,si)=>sec.steps.forEach((st,i)=>
-    out.push({ sec:sec.name, si, i, key:reviewKey(sec.name, st[0]), st })));
+  reviewSections(kind).forEach((sec,si)=>sec.steps.forEach((st,i)=>
+    out.push({ sec:sec.name, si, i, builtin:sec.builtin, key:reviewKey(sec.name, st[0]), st,
+               customId: sec.builtin ? null : (reviewCustom(kind)[i]||{}).id })));
+  return out;
+}
+/* Built-in steps currently hidden, for the "restore" list. */
+function reviewHiddenSteps(kind){
+  const out = [];
+  (REVIEW_LISTS[kind].sections||[]).forEach(sec=>sec.steps.forEach(st=>{
+    const key = reviewKey(sec.name, st[0]);
+    if(isReviewHidden(kind, key)) out.push({ sec:sec.name, key, st });
+  }));
   return out;
 }
 
@@ -577,6 +610,7 @@ function defaultRoot(){
       settings: { nowPins: [], themeMode: matchMedia('(prefers-color-scheme: dark)').matches ? 'dark':'light' },
       lifeAreas: [],
       habits: [],
+      recurring: [],
       reviews: { daily:{}, weekly:{}, monthly:{} },
       gamification: { xp:0, habitBonusDates:[] }
     }
@@ -629,6 +663,29 @@ function loadRoot(){
     if(!h.frequency || !h.frequency.type) h.frequency={type:'daily'};
     if(h.frequency.type==='days' && !Array.isArray(h.frequency.days)) h.frequency.days=[0,1,2,3,4,5,6];
     if(h.frequency.type==='weekly' && !h.frequency.target) h.frequency.target=3;
+    if(h.frequency.type==='monthly' && !h.frequency.target) h.frequency.target=1;
+  });
+  // Recurring task series. The templates live here; their instances are plain items.
+  st.recurring = Array.isArray(st.recurring) ? st.recurring : [];
+  st.recurring.forEach(r=>{
+    if(!r.id) r.id=uid();
+    if(!RECUR_TYPES[r.type]) r.type='weekly';
+    if(!(r.interval>=1)) r.interval=1;
+    if(!Array.isArray(r.days) || !r.days.length) r.days=[0];
+    if(!(r.dayOfMonth>=1 && r.dayOfMonth<=31)) r.dayOfMonth=1;
+    if(!(r.month>=0 && r.month<=11)) r.month=0;
+    if(!r.anchor) r.anchor = (r.createdAt||'').slice(0,10) || todayISO();
+    if(typeof r.paused!=='boolean') r.paused=false;
+    if(typeof r.isChore!=='boolean') r.isChore=false;
+    if(!EFFORT[r.effort]) r.effort=DEFAULT_EFFORT;
+  });
+  // Review steps the owner added themselves, and built-in steps they have hidden.
+  st.reviewCustom = st.reviewCustom || {};
+  st.reviewHidden = st.reviewHidden || {};
+  ['daily','weekly','monthly'].forEach(k=>{
+    if(!Array.isArray(st.reviewCustom[k])) st.reviewCustom[k]=[];
+    st.reviewCustom[k].forEach(x=>{ if(!x.id) x.id=uid(); });
+    if(!Array.isArray(st.reviewHidden[k])) st.reviewHidden[k]=[];
   });
   // Review ticks live outside gamification on purpose: they never award XP.
   st.reviews = st.reviews || {};
@@ -775,6 +832,7 @@ const ui = {
   historyCustomTo: null,
   historyWeekOffset: 0,       // weeks back from current, for the Reports habit-history pager
   reportsTab: 'areas',        // areas | projects | habits | timeline
+  recurringFilter: 'all',     // all | tasks | chores — Recurring view
   reviewTab: 'daily',         // daily | weekly | monthly
   projectHealthFilter: 'all', // all | offtrack | stalled | noplan — Reports > Projects
   projectSearch: '',          // free-text filter on the Projects tab
@@ -855,7 +913,9 @@ const REORDER_LISTS = {
   'move-project': { list: () => projectViewList(),             apply: (f,t) => reorderItemsTo(projectViewList(), f, t) },
   'move-subtask': { list: o => ((byId(o)||{}).subtasks) || [], apply: (f,t,o) => { const p = byId(o); return !!p && moveInArrayTo(p.subtasks, f, t); } },
   'move-child':   { list: o => tasksOf(o),                     apply: (f,t,o) => reorderItemsTo(tasksOf(o), f, t) },
-  'move-habit':   { list: () => state.state.habits,            apply: (f,t) => moveInArrayTo(state.state.habits, f, t) }
+  'move-habit':   { list: () => state.state.habits,            apply: (f,t) => moveInArrayTo(state.state.habits, f, t) },
+  'move-recurrence': { list: () => recurrences(),              apply: (f,t) => moveInArrayTo(recurrences(), f, t) },
+  'move-review':  { list: k => reviewCustom(k),                apply: (f,t,k) => moveInArrayTo(reviewCustom(k), f, t) }
 };
 function applyReorder(action, from, to, owner){
   const spec = REORDER_LISTS[action];
@@ -898,6 +958,163 @@ function cycleEffort(key){
   return EFFORT_ORDER[(i+1) % EFFORT_ORDER.length];
 }
 function dayDiff(fromMs, toMs){ return Math.round((toMs-fromMs)/86400000); }
+
+/* =========================================================
+   Recurring tasks and chores
+
+   A recurring thing is a *series*: a template plus a cadence. The template is
+   not a task and never appears in a list. Instead, every due date that has
+   arrived is materialised into an ordinary task item carrying `seriesId`, so a
+   recurring chore flows through the Inbox, Now, reports and the archive exactly
+   like anything else — no second set of rules to maintain.
+
+   Missed cycles stack, by design: three missed VAT filings are three real debts
+   and should look like three. The cap below is the safety valve — a weekly chore
+   forgotten for a year would otherwise silently create 52 rows.
+   ========================================================= */
+const RECUR_CAP = 24;            // most outstanding open instances one series may have
+const RECUR_LOOKBACK_DAYS = 400; // never materialise history older than this on first run
+
+const RECUR_TYPES = {
+  daily:   { label:'Every day' },
+  weekly:  { label:'Weekly, on set days' },
+  monthly: { label:'Monthly, on a date' },
+  yearly:  { label:'Yearly, on a date' }
+};
+
+function recurrences(){ return state.state.recurring; }
+function seriesById(id){ return recurrences().find(r=>r.id===id) || null; }
+
+/* Every occurrence date of a series in [fromISO, toISO], oldest first. */
+function recurrenceDates(r, fromISO, toISO){
+  const out = [];
+  const from = new Date(fromISO+'T00:00:00'), to = new Date(toISO+'T00:00:00');
+  if(isNaN(from) || isNaN(to) || from>to) return out;
+  const every = Math.max(1, r.interval||1);
+
+  if(r.type==='daily'){
+    const anchor = new Date((r.anchor||fromISO)+'T00:00:00');
+    let d = new Date(from);
+    // Step forward to the first on-cadence day at or after `from`.
+    const off = Math.round((d-anchor)/86400000);
+    if(off % every !== 0) d = addDays(d, every - ((off % every)+every)%every);
+    for(; d<=to; d=addDays(d,every)) out.push(fmtISO(d));
+    return out;
+  }
+  if(r.type==='weekly'){
+    const days = (r.days||[]).length ? r.days : [dowIndex(new Date((r.anchor||fromISO)+'T00:00:00'))];
+    const anchorWeek = startOfWeek(new Date((r.anchor||fromISO)+'T00:00:00'));
+    for(let d=new Date(from); d<=to; d=addDays(d,1)){
+      if(!days.includes(dowIndex(d))) continue;
+      // "every N weeks" counts whole weeks from the anchor's week.
+      const weeks = Math.round((startOfWeek(d)-anchorWeek)/604800000);
+      if(((weeks % every)+every)%every === 0) out.push(fmtISO(d));
+    }
+    return out;
+  }
+  if(r.type==='monthly' || r.type==='yearly'){
+    const anchor = new Date((r.anchor||fromISO)+'T00:00:00');
+    const dom = Math.min(31, Math.max(1, r.dayOfMonth || anchor.getDate()));
+    const mon = r.type==='yearly' ? (r.month!=null ? r.month : anchor.getMonth()) : null;
+    const stepMonths = r.type==='yearly' ? 12*every : every;
+    // Walk months from the anchor's month, and clamp the day into short months
+    // so "the 31st" lands on the 30th in April rather than skipping to May.
+    let cursor = new Date(anchor.getFullYear(), r.type==='yearly'? mon : anchor.getMonth(), 1);
+    while(cursor <= to){
+      const last = new Date(cursor.getFullYear(), cursor.getMonth()+1, 0).getDate();
+      const d = new Date(cursor.getFullYear(), cursor.getMonth(), Math.min(dom, last));
+      if(d>=from && d<=to) out.push(fmtISO(d));
+      cursor = new Date(cursor.getFullYear(), cursor.getMonth()+stepMonths, 1);
+      if(out.length>2000) break;
+    }
+    return out;
+  }
+  return out;
+}
+
+function seriesInstances(seriesId){ return items().filter(i=>i.seriesId===seriesId); }
+function seriesOutstanding(seriesId){ return seriesInstances(seriesId).filter(i=>i.status==='open'); }
+
+/* Create a task for every occurrence that has come due and does not exist yet.
+   Runs on load and on every persist; doing nothing is the common case. */
+function materialiseRecurring(){
+  const today = todayISO();
+  let created = 0, capped = [];
+  recurrences().forEach(r=>{
+    if(r.paused) return;
+    const already = new Set(seriesInstances(r.id).map(i=>i.occursOn));
+    const floor = fmtISO(addDays(new Date(), -RECUR_LOOKBACK_DAYS));
+    let from = r.lastGeneratedOn ? fmtISO(addDays(new Date(r.lastGeneratedOn+'T00:00:00'),1))
+                                : (r.anchor && r.anchor>floor ? r.anchor : floor);
+    const dates = recurrenceDates(r, from, today);
+    for(const d of dates){
+      if(already.has(d)) continue;
+      if(seriesOutstanding(r.id).length >= RECUR_CAP){
+        // Stop rather than flood. The series says so on its face; it is not silent.
+        r.paused = true;
+        r.pausedReason = `${RECUR_CAP} outstanding — clear some and un-pause`;
+        capped.push(r.title);
+        break;
+      }
+      newItem({
+        title: r.title, category: r.category || 'Inbox', priority: r.priority || 'medium',
+        effort: r.effort || DEFAULT_EFFORT, assignee: r.assignee || null,
+        dueDate: d, seriesId: r.id, occursOn: d
+      });
+      created++;
+      r.lastGeneratedOn = d;
+    }
+    if(!r.paused && dates.length) r.lastGeneratedOn = dates[dates.length-1];
+  });
+  return { created, capped };
+}
+
+/* Generate anything that came due while the app was closed, and say so rather
+   than silently growing the Inbox. Never calls persist(): boot renders once on
+   its own, and a toast during boot is enough. */
+function catchUpRecurring(){
+  const made = materialiseRecurring();
+  if(made.created){
+    persistLocal();
+    pushToast(`${made.created} recurring task${made.created===1?'':'s'} came due`);
+  }
+  made.capped.forEach(t=>pushToast(`"${t}" paused — ${RECUR_CAP} outstanding`));
+  return made;
+}
+
+function newRecurrence(partial){
+  const r = Object.assign({
+    id: uid(), title:'', type:'weekly', interval:1, days:[dowIndex(new Date())],
+    dayOfMonth: new Date().getDate(), month: new Date().getMonth(),
+    anchor: todayISO(), category:'Inbox', priority:'medium', effort:DEFAULT_EFFORT,
+    assignee:null, isChore:false, paused:false, pausedReason:null,
+    lastGeneratedOn:null, createdAt:new Date().toISOString()
+  }, partial);
+  recurrences().push(r);
+  return r;
+}
+
+/* Plain-English cadence, for the row and the editor summary. */
+function recurrenceLabel(r){
+  const n = Math.max(1, r.interval||1);
+  const ord = d => d + (d%10===1&&d!==11?'st':d%10===2&&d!==12?'nd':d%10===3&&d!==13?'rd':'th');
+  if(r.type==='daily')   return n===1 ? 'Every day' : `Every ${n} days`;
+  if(r.type==='weekly'){
+    const names = (r.days||[]).slice().sort((a,b)=>a-b).map(i=>DAY_LABELS[i]).join(', ') || '—';
+    return n===1 ? `Every week on ${names}` : `Every ${n} weeks on ${names}`;
+  }
+  if(r.type==='monthly') return n===1 ? `Monthly on the ${ord(r.dayOfMonth)}` : `Every ${n} months on the ${ord(r.dayOfMonth)}`;
+  if(r.type==='yearly'){
+    const m = new Date(2000, r.month||0, 1).toLocaleDateString(undefined,{month:'long'});
+    return n===1 ? `Every year on ${m} ${ord(r.dayOfMonth)}` : `Every ${n} years on ${m} ${ord(r.dayOfMonth)}`;
+  }
+  return '—';
+}
+function nextOccurrence(r){
+  const today = todayISO();
+  const ahead = recurrenceDates(r, today, fmtISO(addDays(new Date(), 800)));
+  return ahead.length ? ahead[0] : null;
+}
 function endOfDayMs(dateISO){ const t = Date.parse(dateISO+'T23:59:59'); return isNaN(t)?null:t; }
 function clampPct(n){ return Math.max(0, Math.min(100, n)); }
 
@@ -1153,7 +1370,8 @@ function newItem(partial){
     id: uid(), type:'task', title:'', status:'open',
     category:'Inbox', priority:'medium', dueDate:null, createdAt: new Date().toISOString(),
     completedAt:null, projectId:null, subtasks:[], assignee:null,
-    contactName:null, lastContactDate:null, isStarred:false, xpAwarded:false, effort:DEFAULT_EFFORT, startDate:null
+    contactName:null, lastContactDate:null, isStarred:false, xpAwarded:false, effort:DEFAULT_EFFORT, startDate:null,
+    seriesId:null, occursOn:null
   }, partial);
   items().push(it);
   return it;
@@ -1236,7 +1454,7 @@ function dowIndex(d){ return (d.getDay()+6)%7; } // 0=Mon..6=Sun, matches DAY_LA
 function isHabitRequiredOn(habit, dateISO){
   const f = habit.frequency || {type:'daily'};
   if(f.type==='days') return (f.days||[]).includes(dowIndex(new Date(dateISO+'T00:00:00')));
-  if(f.type==='weekly') return false; // evaluated per-week, not required on any single day
+  if(f.type==='weekly' || f.type==='monthly') return false; // target inside a window, not a given day
   return true; // daily
 }
 function maybeAwardHabitBonus(dateISO){
@@ -1251,7 +1469,8 @@ function maybeAwardHabitBonus(dateISO){
 }
 function habitStreak(habit){
   const f = habit.frequency || {type:'daily'};
-  if(f.type==='weekly') return weeklyHabitStreak(habit, f.target||1);
+  if(f.type==='weekly')  return weeklyHabitStreak(habit, f.target||1);
+  if(f.type==='monthly') return monthlyHabitStreak(habit, f.target||1);
   let cursor=new Date(); let streak=0; let first=true;
   while(true){
     const key=fmtISO(cursor);
@@ -1281,9 +1500,33 @@ function weeklyHabitStreak(habit, target){
   }
   return streak;
 }
+/* Months are the same shape as weeks: hit the target inside the window, no day
+   is required in particular. The current month is never counted as a miss. */
+function monthWindow(offset){
+  const now = new Date();
+  const first = new Date(now.getFullYear(), now.getMonth()-offset, 1);
+  return { first, last: new Date(first.getFullYear(), first.getMonth()+1, 0) };
+}
+function habitMonthCount(habit, offset){
+  const { first, last } = monthWindow(offset||0);
+  let count=0;
+  for(let d=new Date(first); d<=last; d=addDays(d,1)) if(habit.log[fmtISO(d)]) count++;
+  return count;
+}
+function monthlyHabitStreak(habit, target){
+  let offset=0, streak=0;
+  while(true){
+    if(habitMonthCount(habit, offset) >= target) streak++;
+    else if(offset>0) break;
+    offset++;
+    if(offset>240) break;
+  }
+  return streak;
+}
 function fmtHabitStreak(habit){
+  const t = (habit.frequency||{}).type;
   const n = habitStreak(habit);
-  return (habit.frequency && habit.frequency.type==='weekly') ? `${n}wk` : `${n}d`;
+  return t==='weekly' ? `${n}wk` : t==='monthly' ? `${n}mo` : `${n}d`;
 }
 
 /* =========================================================
@@ -1327,6 +1570,7 @@ function renderSidebar(){
     ${navItem('projects', icon('projects'), 'Projects')}
     ${navItem('binder', icon('binder'), 'Life Binder')}
     ${navItem('habits', icon('habit'), 'Habits')}
+    ${navItem('recurring', icon('repeat'), 'Recurring', recurrences().filter(r=>!r.paused).length||'')}
     ${navItem('reports', icon('reports'), 'Reports')}
     ${navItem('review', icon('now'), 'Review')}
     <div class="nav-divider"></div>
@@ -1346,6 +1590,7 @@ function icon(name){
     projects:`<svg viewBox="0 0 24 24" fill="none" style="${s}"><rect x="3.5" y="6" width="17" height="13" rx="2" stroke="currentColor" stroke-width="1.8"/><path d="M8 6V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v1" stroke="currentColor" stroke-width="1.8"/></svg>`,
     binder:`<svg viewBox="0 0 24 24" fill="none" style="${s}"><path d="M6 3.5h9A2.5 2.5 0 0 1 17.5 6v14.5h-9A2.5 2.5 0 0 1 6 18Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M6 3.5v17" stroke="currentColor" stroke-width="1.8"/><path d="M9.5 8h5M9.5 11.5h5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>`,
     habit:`<svg viewBox="0 0 24 24" fill="none" style="${s}"><path d="M4 12.5 9 17l11-11" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
+    repeat:`<svg viewBox="0 0 24 24" fill="none" style="${s}"><path d="M4 9a4 4 0 0 1 4-4h9l-2.5-2.5M20 15a4 4 0 0 1-4 4H7l2.5 2.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
     reports:`<svg viewBox="0 0 24 24" fill="none" style="${s}"><path d="M4 20V10M11 20V4M18 20v-7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>`,
     follow:`<svg viewBox="0 0 24 24" fill="none" style="${s}"><circle cx="12" cy="8" r="3.3" stroke="currentColor" stroke-width="1.8"/><path d="M5 20c1-4 4-6 7-6s6 2 7 6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>`,
     theme:`<svg viewBox="0 0 24 24" fill="none" style="${s}"><path d="M20 14.5A8.5 8.5 0 1 1 9.5 4a7 7 0 0 0 10.5 10.5Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>`,
@@ -1390,6 +1635,7 @@ function renderView(){
     case 'binder': return renderBinderView();
     case 'habits': return renderHabitsView();
     case 'followups': return renderFollowupsView();
+    case 'recurring': return renderRecurringView();
     case 'reports': return renderReportsView();
     case 'review': return renderReviewView();
     case 'settings': return renderSettingsView();
@@ -1410,7 +1656,13 @@ let midnightTimer = null;
 function scheduleMidnightRollover(){
   if(midnightTimer) clearTimeout(midnightTimer);
   const next = new Date(); next.setHours(24,0,5,0);   // just after midnight
-  midnightTimer = setTimeout(()=>{ midnightTimer=null; render(); scheduleMidnightRollover(); }, next-new Date());
+  midnightTimer = setTimeout(()=>{
+    midnightTimer=null;
+    // A new day may have brought recurring items due; create them before repainting.
+    if(catchUpRecurring().created) persistLocal();
+    render();
+    scheduleMidnightRollover();
+  }, next-new Date());
 }
 
 function renderNowView(){
@@ -1471,8 +1723,10 @@ function renderMeta(it){
   const bits=[];
   bits.push(`<span class="chip" style="${catStyle(it.category)}">${esc(it.category)}</span>`);
   const parent = it.projectId ? byId(it.projectId) : null;
+  const series = it.seriesId ? seriesById(it.seriesId) : null;
   if(parent) bits.push(`<span class="parent-chip">📁 ${esc(parent.title)}</span>`);
-  else if(it.type==='task') bits.push(`<span class="parent-chip">standalone</span>`);
+  else if(series) bits.push(`<button class="parent-chip" data-action="open-series" data-series="${series.id}" title="${esc(recurrenceLabel(series))} — click to edit the cadence">${series.isChore?'🧹':'🔁'} ${esc(recurrenceLabel(series))}</button>`);
+  else if(it.type==='task') bits.push(`<span class="parent-chip">${it.category==='Inbox'?'standalone · unfiled':'standalone'}</span>`);
   if(it.assignee) bits.push(`<span class="chip">👤 ${esc(it.assignee)}</span>`);
   if(it.dueDate) bits.push(`<span style="${isOverdue(it)?'color:var(--c-danger);font-weight:700':''}">${fmtDue(it.dueDate)}</span>`);
   if(it.isStarred) bits.push('⭐');
@@ -1510,7 +1764,7 @@ function renderHabitStrip(compact, weekOffset){
     </div>
     ${habits.map(h=>`
       <div class="habit-row ${h.active===false?'inactive':''}" ${compact?'':'data-dnd-row'}>
-        <div class="habit-name" title="${esc(h.name)}">${h.emoji} ${esc(h.name)}${h.active===false?' <span class="chip" style="padding:1px 6px">retired</span>':''}${h.frequency&&h.frequency.type==='weekly'?` <span style="color:var(--c-text-muted);font-weight:500">(${h.frequency.target}x/wk)</span>`:''}</div>
+        <div class="habit-name" title="${esc(h.name)}">${h.emoji} ${esc(h.name)}${h.active===false?' <span class="chip" style="padding:1px 6px">retired</span>':''}${h.frequency&&(h.frequency.type==='weekly'||h.frequency.type==='monthly')?` <span style="color:var(--c-text-muted);font-weight:500">(${h.frequency.target}x/${h.frequency.type==='monthly'?'mo':'wk'}${h.frequency.type==='monthly'?` · ${habitMonthCount(h,0)} this month`:''})</span>`:''}</div>
         <div class="habit-days">
           ${week.map((d,i)=>{
             const offSched = h.frequency && h.frequency.type==='days' && !(h.frequency.days||[]).includes(i);
@@ -1534,11 +1788,17 @@ function renderHabitStrip(compact, weekOffset){
 /* Every open task, wherever it lives — the Inbox is the one place to see them all.
    "Unfiled" is the classic inbox and is what Process Inbox works through. */
 function allOpenTasks(){ return items().filter(i=>i.type==='task' && i.status==='open'); }
+/* Scopes are filters, not a partition — Unfiled is deliberately a subset of
+   Standalone. "Standalone" means exactly what the chip on each row means: not
+   part of a project. It used to also require a domain, so a freshly captured
+   task was chipped "standalone" on its own row and then missing from the
+   Standalone scope, which is the one thing a filter must never do. */
 function inboxScoped(){
   const t = allOpenTasks();
   if(ui.inboxScope==='unfiled')     return t.filter(i=>i.category==='Inbox');
   if(ui.inboxScope==='project')     return t.filter(i=>i.projectId);
-  if(ui.inboxScope==='standalone')  return t.filter(i=>!i.projectId && i.category!=='Inbox');
+  if(ui.inboxScope==='standalone')  return t.filter(i=>!i.projectId);
+  if(ui.inboxScope==='recurring')   return t.filter(i=>i.seriesId);
   return t;
 }
 
@@ -1571,11 +1831,12 @@ function renderInboxView(){
       <button class="btn btn-primary" data-action="capture-add">Add</button>
     </div>
     <div class="chip-row">
-      ${[['all','All open tasks',allOpenTasks().length],
-         ['unfiled','Unfiled',unfiled.length],
-         ['project','In a project',allOpenTasks().filter(i=>i.projectId).length],
-         ['standalone','Standalone',allOpenTasks().filter(i=>!i.projectId && i.category!=='Inbox').length]
-        ].map(([k,label,n])=>`<button class="chip ${ui.inboxScope===k?'on':''}" data-action="inbox-scope" data-scope="${k}">${label} (${n})</button>`).join('')}
+      ${[['all','All open tasks',allOpenTasks().length,'Every open task, wherever it lives'],
+         ['unfiled','Unfiled',unfiled.length,'No domain yet — these are what Process Inbox works through. A subset of Standalone.'],
+         ['project','In a project',allOpenTasks().filter(i=>i.projectId).length,'A step inside a project'],
+         ['standalone','Standalone',allOpenTasks().filter(i=>!i.projectId).length,'Not part of any project — filed or not. Includes everything under Unfiled.'],
+         ['recurring','Recurring',allOpenTasks().filter(i=>i.seriesId).length,'Created by a recurring cadence']
+        ].map(([k,label,n,tip])=>`<button class="chip ${ui.inboxScope===k?'on':''}" data-action="inbox-scope" data-scope="${k}" title="${esc(tip)}">${label} (${n})</button>`).join('')}
     </div>
     <div class="filter-bar">
       ${searchBox('inbox-search', ui.inboxSearch, 'Search tasks, projects, domains, owners…')}
@@ -1802,6 +2063,8 @@ function reviewTicks(kind){
 function renderReviewList(kind){
   const list = REVIEW_LISTS[kind];
   const store = reviewTicks(kind);
+  const sections = reviewSections(kind);
+  const hidden = reviewHiddenSteps(kind);
   const all = reviewSteps(kind);
   const doneCount = all.filter(x=>store.done[x.key]).length;
   const pct = all.length? Math.round(doneCount/all.length*100) : 0;
@@ -1817,26 +2080,37 @@ function renderReviewList(kind){
       </div>
     </div>
     <div class="project-progress-track" style="margin-bottom:4px"><div class="project-progress-fill" style="width:${pct}%"></div></div>
-    ${list.sections.map((sec,si)=>{
+    ${sections.map((sec,si)=>{
       const mine = all.filter(x=>x.si===si);
       const secDone = mine.filter(x=>store.done[x.key]).length;
       return `<div class="rv-sec">
         <span>${esc(sec.name)}</span>
         <span class="rv-sec-count">${secDone}/${mine.length}</span>
       </div>
-      ${mine.map(x=>{
+      ${mine.map((x,ri)=>{
         const [what,why,where] = x.st;
         const on = !!store.done[x.key];
-        return `<div class="rv-step ${on?'done':''}">
+        return `<div class="rv-step ${on?'done':''}" data-dnd-row>
           <div class="box ${on?'on':''}" data-action="review-tick" data-kind="${kind}" data-key="${x.key}">${on?'✓':''}</div>
           <div class="rv-body" data-action="review-tick" data-kind="${kind}" data-key="${x.key}">
             <div class="rv-what">${esc(what)}</div>
             <div class="rv-why">${esc(why)}</div>
             <span class="rv-where">${esc(where)}</span>
           </div>
+          <div class="item-actions rv-tools">
+            ${sec.builtin
+              ? `<button class="icon-btn btn-sm" data-action="hide-review-step" data-kind="${kind}" data-key="${x.key}" title="Hide this step — you can restore it below">✕</button>`
+              : `${moveTools('move-review', x.customId, ri, mine.length, '', kind)}
+                 <button class="icon-btn btn-sm" data-action="edit-review-step" data-kind="${kind}" data-id="${x.customId}" title="Edit">✎</button>
+                 <button class="icon-btn btn-sm btn-danger" data-action="delete-review-step" data-kind="${kind}" data-id="${x.customId}" title="Delete">✕</button>`}
+          </div>
         </div>`;
       }).join('')}`;
     }).join('')}
+    <div class="rv-foot">
+      <button class="btn btn-sm" data-action="add-review-step" data-kind="${kind}">+ Add your own step</button>
+      ${hidden.length? `<button class="btn btn-sm btn-ghost" data-action="restore-review-steps" data-kind="${kind}">Restore ${hidden.length} hidden step${hidden.length===1?'':'s'}</button>` : ''}
+    </div>
   </div>`;
 }
 function renderReviewView(){
@@ -1928,11 +2202,11 @@ function inHistoryRange(it){
 function habitConsistency(habit, days){
   days = days||30;
   const f = habit.frequency || {type:'daily'};
-  if(f.type==='weekly'){
+  if(f.type==='weekly' || f.type==='monthly'){
     const target = f.target||1;
     let done=0, cursor=new Date();
     for(let i=0;i<days;i++){ if(habit.log[fmtISO(cursor)]) done++; cursor=addDays(cursor,-1); }
-    const expected = target * (days/7);
+    const expected = target * (days / (f.type==='monthly' ? 30.44 : 7));
     return expected>0 ? Math.min(100, Math.round(done/expected*100)) : 0;
   }
   let done=0, required=0, cursor=new Date();
@@ -2081,6 +2355,69 @@ function renderHistoryRow(it){
         ${proj?`<span>in ${esc(proj.title)}</span>`:''}
         <span>Completed ${fmtHistoryDate(it.completedAt)}</span>
       </div>
+    </div>
+  </div>`;
+}
+
+/* ---------- RECURRING ---------- */
+/* One row per series. The instances it has already created are ordinary tasks and
+   live in the Inbox; this tab is the place to see and change the cadence itself. */
+function renderRecurringView(){
+  const all = recurrences();
+  const f = ui.recurringFilter;
+  const list = f==='chores' ? all.filter(r=>r.isChore)
+             : f==='tasks'  ? all.filter(r=>!r.isChore)
+             : all;
+  const outstandingTotal = all.reduce((n,r)=>n+seriesOutstanding(r.id).length, 0);
+  const pausedCount = all.filter(r=>r.paused).length;
+  const chip = (k,label,n)=>`<button class="chip ${f===k?'on':''}" data-action="recurring-filter" data-f="${k}">${label} (${n})</button>`;
+
+  return `<div class="view">
+    <div class="view-head">
+      <div><div class="view-title">Recurring</div><div class="view-sub">Anything that comes back — VAT, payroll, contract reviews, the bins. Each due date becomes a real task in your Inbox, and a missed one stays there.</div></div>
+      <button class="btn btn-primary" data-action="new-recurrence">+ New recurring</button>
+    </div>
+    ${all.length? `<div class="rollup-grid">
+      <div class="rollup-tile"><div class="v">${all.length}</div><div class="k">Series</div></div>
+      <div class="rollup-tile"><div class="v" style="color:${outstandingTotal?'var(--c-warn)':'inherit'}">${outstandingTotal}</div><div class="k">Outstanding</div></div>
+      <div class="rollup-tile"><div class="v" style="color:${pausedCount?'var(--c-danger)':'inherit'}">${pausedCount}</div><div class="k">Paused</div></div>
+    </div>` : ''}
+    ${all.length? `<div class="chip-row">
+      ${chip('all','All',all.length)}
+      ${chip('tasks','Tasks',all.filter(r=>!r.isChore).length)}
+      ${chip('chores','Chores',all.filter(r=>r.isChore).length)}
+    </div>` : ''}
+    ${list.length? list.map((r,i)=>renderRecurrenceRow(r,i,list.length)).join('')
+      : `<div class="empty">${all.length? 'Nothing in this filter.' : 'Nothing recurring yet. Add the things that come back whether you remember them or not — VAT on the 15th, payroll, the water filter.'}</div>`}
+  </div>`;
+}
+
+function renderRecurrenceRow(r, i, len){
+  const open = seriesOutstanding(r.id);
+  const overdue = open.filter(it=>it.dueDate && it.dueDate < todayISO());
+  const done = seriesInstances(r.id).filter(it=>it.status==='done').length;
+  const next = r.paused ? null : nextOccurrence(r);
+  return `<div class="item-row" data-dnd-row>
+    ${numLabel(i)}
+    <div class="item-main">
+      <div class="item-title clickable-title" data-action="edit-recurrence" data-id="${r.id}" title="Edit this cadence">${esc(r.title)}</div>
+      <div class="item-meta">
+        <span class="chip" style="${catStyle(r.category)}">${esc(r.category)}</span>
+        ${r.isChore? '<span class="chip">🧹 Chore</span>':''}
+        <span>${esc(recurrenceLabel(r))}</span>
+        ${r.assignee? `<span class="chip">👤 ${esc(r.assignee)}</span>`:''}
+        ${overdue.length? `<span style="color:var(--c-danger);font-weight:700">${overdue.length} overdue</span>`
+          : open.length? `<span style="color:var(--c-warn);font-weight:600">${open.length} open</span>` : ''}
+        ${done? `<span>${done} done</span>`:''}
+        ${r.paused? `<span class="health-chip health-behind" title="${esc(r.pausedReason||'Paused')}">⏸ Paused${r.pausedReason?' — '+esc(r.pausedReason):''}</span>`
+                  : next? `<span>Next: ${fmtDue(next)}</span>` : ''}
+      </div>
+    </div>
+    <div class="item-actions">
+      ${moveTools('move-recurrence', r.id, i, len)}
+      <button class="icon-btn btn-sm" data-action="toggle-recurrence-pause" data-id="${r.id}" title="${r.paused?'Resume — it will catch up on anything missed':'Pause — stops creating new ones, keeps the ones already made'}">${r.paused?'▶':'⏸'}</button>
+      <button class="icon-btn btn-sm" data-action="edit-recurrence" data-id="${r.id}" title="Edit">✎</button>
+      <button class="icon-btn btn-sm btn-danger" data-action="delete-recurrence" data-id="${r.id}" title="Delete the cadence">✕</button>
     </div>
   </div>`;
 }
@@ -2394,6 +2731,133 @@ function modalRollupDrill(key, area){
     </div>`);
 }
 
+function modalReviewStep(kind, existing){
+  const c = existing || { what:'', why:'', where:'' };
+  openModal(`
+    <h3>${existing?'Edit step':'Add a step'} — ${esc(REVIEW_LISTS[kind].label)}</h3>
+    <div class="view-sub" style="margin-bottom:14px">Your own steps sit at the end of the list and reset on the same cadence. Like every step here, ticking one earns no XP.</div>
+    <div class="field"><label>What to do</label>
+      <input id="rv-what" type="text" value="${esc(c.what)}" placeholder="Call the Nigist bookkeeper"/>
+    </div>
+    <div class="field"><label>Why it matters (optional)</label>
+      <textarea id="rv-why" rows="3" placeholder="What goes wrong if you skip it — this is the line that gets you to actually do it">${esc(c.why)}</textarea>
+    </div>
+    <div class="field"><label>Where (optional)</label>
+      <input id="rv-where" type="text" value="${esc(c.where)}" placeholder="Phone / Finance app / Projects"/>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" data-action="close-modal">Cancel</button>
+      <button class="btn btn-primary" data-action="save-review-step" data-kind="${kind}" ${existing?`data-id="${existing.id}"`:''}>${existing?'Save':'Add'}</button>
+    </div>`);
+}
+
+function modalRestoreReviewSteps(kind){
+  const hidden = reviewHiddenSteps(kind);
+  openModal(`
+    <h3>Hidden steps — ${esc(REVIEW_LISTS[kind].label)}</h3>
+    <div class="view-sub" style="margin-bottom:14px">${hidden.length? 'Restore any of these to put them back in the list.' : 'Nothing is hidden in this list.'}</div>
+    ${hidden.map(h=>`<div class="item-row">
+      <div class="item-main">
+        <div class="item-title">${esc(h.st[0])}</div>
+        <div class="item-meta"><span class="chip">${esc(h.sec)}</span><span>${esc(h.st[2])}</span></div>
+      </div>
+      <button class="btn btn-sm" data-action="restore-review-step" data-kind="${kind}" data-key="${h.key}">Restore</button>
+    </div>`).join('')}
+    <div class="modal-actions">
+      ${hidden.length>1? `<button class="btn" data-action="restore-review-step" data-kind="${kind}" data-key="*">Restore all</button>`:''}
+      <button class="btn btn-primary" data-action="close-modal">Close</button>
+    </div>`);
+}
+
+function modalRecurrence(r){
+  const isNew = !r;
+  r = r || newRecurrenceDraft();
+  const areas = state.state.lifeAreas;
+  const assignees = Array.from(new Set(items().filter(i=>i.assignee).map(i=>i.assignee))).sort();
+  const months = Array.from({length:12}).map((_,m)=>new Date(2000,m,1).toLocaleDateString(undefined,{month:'long'}));
+  openModal(`
+    <h3>${isNew?'New recurring item':'Edit recurring item'}</h3>
+    <div class="view-sub" style="margin-bottom:14px">Every time this comes due, a task appears in your Inbox with that date. Miss one and it stays there — the next one still arrives.</div>
+    <div class="field"><label>What</label>
+      <input id="rc-title" type="text" value="${esc(r.title)}" placeholder="File VAT return / Take the bins out / Payroll run"/>
+    </div>
+    <div class="field"><label>Domain</label>
+      <select id="rc-cat">
+        <option value="Inbox" ${r.category==='Inbox'?'selected':''}>Inbox (unfiled)</option>
+        ${areas.map(a=>`<option value="${esc(a.name)}" ${r.category===a.name?'selected':''}>${esc(a.name)}</option>`).join('')}
+      </select>
+    </div>
+    <div class="field"><label>Repeats</label>
+      <select id="rc-type" data-action-change="rc-type-changed">
+        ${Object.keys(RECUR_TYPES).map(k=>`<option value="${k}" ${r.type===k?'selected':''}>${RECUR_TYPES[k].label}</option>`).join('')}
+      </select>
+    </div>
+    <div class="field"><label>Every</label>
+      <input id="rc-interval" type="number" min="1" max="60" value="${r.interval||1}"/>
+      <div class="view-sub" style="margin:4px 0 0">1 = every time. 2 = every other week / month / year.</div>
+    </div>
+    <div class="field" id="rc-days-wrap" style="${r.type==='weekly'?'':'display:none'}">
+      <label>On these days</label>
+      <div class="chip-row" style="margin-bottom:0">
+        ${DAY_LABELS.map((lbl,i)=>`<button type="button" class="chip ${(r.days||[]).includes(i)?'on':''}" data-action="toggle-rc-day" data-day="${i}">${lbl}</button>`).join('')}
+      </div>
+    </div>
+    <div class="field" id="rc-month-wrap" style="${r.type==='yearly'?'':'display:none'}">
+      <label>Month</label>
+      <select id="rc-month">${months.map((m,i)=>`<option value="${i}" ${r.month===i?'selected':''}>${m}</option>`).join('')}</select>
+    </div>
+    <div class="field" id="rc-dom-wrap" style="${r.type==='monthly'||r.type==='yearly'?'':'display:none'}">
+      <label>Day of the month</label>
+      <input id="rc-dom" type="number" min="1" max="31" value="${r.dayOfMonth||1}"/>
+      <div class="view-sub" style="margin:4px 0 0">Pick 31 and short months use their last day, so February lands on the 28th rather than skipping.</div>
+    </div>
+    <div class="field"><label>Start counting from</label>
+      <input id="rc-anchor" type="date" value="${esc(r.anchor||todayISO())}"/>
+      <div class="view-sub" style="margin:4px 0 0">Nothing is created before this date. Set it forward to start next month.</div>
+    </div>
+    <div class="field"><label>Owner (optional)</label>
+      <input id="rc-assignee" type="text" list="rc-assignee-list" value="${esc(r.assignee||'')}" placeholder="Who does it"/>
+      <datalist id="rc-assignee-list">${assignees.map(a=>`<option value="${esc(a)}"></option>`).join('')}</datalist>
+    </div>
+    <div class="field"><label>Priority</label>
+      <select id="rc-pri">${['high','medium','low'].map(pv=>`<option value="${pv}" ${r.priority===pv?'selected':''}>${pv}</option>`).join('')}</select>
+    </div>
+    <div class="field"><label>Effort</label>
+      <select id="rc-effort">${EFFORT_ORDER.map(k=>`<option value="${k}" ${r.effort===k?'selected':''}>${EFFORT[k].label} — ${esc(EFFORT[k].title)}</option>`).join('')}</select>
+    </div>
+    <div class="field">
+      <label><input id="rc-chore" type="checkbox" ${r.isChore?'checked':''}/> This is a chore</label>
+      <div class="view-sub" style="margin:4px 0 0">Only changes how it is labelled and filtered — chores behave exactly like any other recurring task.</div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" data-action="close-modal">Cancel</button>
+      <button class="btn btn-primary" data-action="save-recurrence" ${isNew?'':`data-id="${r.id}"`}>${isNew?'Create':'Save'}</button>
+    </div>`);
+}
+function newRecurrenceDraft(){
+  return { id:null, title:'', type:'weekly', interval:1, days:[dowIndex(new Date())],
+    dayOfMonth:new Date().getDate(), month:new Date().getMonth(), anchor:todayISO(),
+    category:'Inbox', priority:'medium', effort:DEFAULT_EFFORT, assignee:null, isChore:false };
+}
+function readRecurrenceForm(){
+  const type = qs('#rc-type').value;
+  const days = qsa('[data-action="toggle-rc-day"].on').map(b=>+b.getAttribute('data-day'));
+  return {
+    title: (qs('#rc-title').value||'').trim(),
+    category: qs('#rc-cat').value,
+    type: RECUR_TYPES[type] ? type : 'weekly',
+    interval: Math.max(1, Math.min(60, parseInt(qs('#rc-interval').value,10)||1)),
+    days: days.length ? days : [dowIndex(new Date())],
+    month: Math.max(0, Math.min(11, parseInt(qs('#rc-month').value,10)||0)),
+    dayOfMonth: Math.max(1, Math.min(31, parseInt(qs('#rc-dom').value,10)||1)),
+    anchor: qs('#rc-anchor').value || todayISO(),
+    assignee: (qs('#rc-assignee').value||'').trim() || null,
+    priority: qs('#rc-pri').value,
+    effort: qs('#rc-effort').value,
+    isChore: !!qs('#rc-chore').checked
+  };
+}
+
 function modalConvertToProject(item){
   const areas = state.state.lifeAreas;
   openModal(`
@@ -2418,6 +2882,7 @@ function habitFreqFieldsHTML(freq){
         <option value="daily" ${freq.type==='daily'?'selected':''}>Every day</option>
         <option value="days" ${freq.type==='days'?'selected':''}>Specific days</option>
         <option value="weekly" ${freq.type==='weekly'?'selected':''}>X times a week</option>
+        <option value="monthly" ${freq.type==='monthly'?'selected':''}>X times a month</option>
       </select>
     </div>
     <div class="field" id="hb-freq-days-wrap" style="${freq.type==='days'?'':'display:none'}">
@@ -2426,9 +2891,9 @@ function habitFreqFieldsHTML(freq){
         ${DAY_LABELS.map((lbl,i)=>`<button type="button" class="chip ${days.includes(i)?'on':''}" data-action="toggle-hb-day" data-day="${i}">${lbl}</button>`).join('')}
       </div>
     </div>
-    <div class="field" id="hb-freq-target-wrap" style="${freq.type==='weekly'?'':'display:none'}">
-      <label>Times per week</label>
-      <input id="hb-freq-target" type="number" min="1" max="7" value="${target}"/>
+    <div class="field" id="hb-freq-target-wrap" style="${freq.type==='weekly'||freq.type==='monthly'?'':'display:none'}">
+      <label id="hb-freq-target-label">Times per ${freq.type==='monthly'?'month':'week'}</label>
+      <input id="hb-freq-target" type="number" min="1" max="${freq.type==='monthly'?31:7}" value="${target}"/>
     </div>`;
 }
 function readHabitFrequencyFromForm(){
@@ -2437,9 +2902,10 @@ function readHabitFrequencyFromForm(){
     const days = qsa('[data-action="toggle-hb-day"].on').map(b=>+b.getAttribute('data-day'));
     return {type:'days', days: days.length?days:[0,1,2,3,4,5,6]};
   }
-  if(type==='weekly'){
-    const target = Math.max(1, Math.min(7, parseInt(qs('#hb-freq-target').value,10)||3));
-    return {type:'weekly', target};
+  if(type==='weekly' || type==='monthly'){
+    const cap = type==='monthly' ? 31 : 7;
+    const target = Math.max(1, Math.min(cap, parseInt(qs('#hb-freq-target').value,10) || (type==='monthly'?1:3)));
+    return {type, target};
   }
   return {type:'daily'};
 }
@@ -3076,6 +3542,7 @@ function exportHabitsReport(){
   const list = state.state.habits;
   const freqLabel = h => { const f=h.frequency||{type:'daily'};
     return f.type==='weekly' ? `${f.target}x per week`
+         : f.type==='monthly' ? `${f.target}x per month`
          : f.type==='days' ? (f.days||[]).map(d=>DAY_LABELS[d]).join(', ')
          : 'Every day'; };
   const html = `<h1>Habits</h1>
@@ -3391,8 +3858,8 @@ function handleAction(action, el){
     case 'clear-inbox-search': ui.inboxSearch=''; render(); break;
     case 'inbox-scope': ui.inboxScope = el.getAttribute('data-scope'); render(); break;
     case 'inbox-project': ui.inboxProject = el.value; render(); break;
-    case 'move-now': case 'move-inbox': case 'move-project':
-    case 'move-subtask': case 'move-child': case 'move-habit': {
+    case 'move-now': case 'move-inbox': case 'move-project': case 'move-subtask':
+    case 'move-child': case 'move-habit': case 'move-recurrence': case 'move-review': {
       const from = +el.getAttribute('data-i');
       if(applyReorder(action, from, from + (+el.getAttribute('data-dir')), el.getAttribute('data-owner'))) persist();
       break;
@@ -3451,6 +3918,120 @@ function handleAction(action, el){
     case 'open-area': { const a = state.state.lifeAreas.find(x=>x.name===el.getAttribute('data-area')); if(a) modalAreaDetail(a); break; }
     case 'open-project-report': { const p = byId(id); if(p) modalProjectDetail(p); break; }
     case 'rollup-drill': modalRollupDrill(el.getAttribute('data-key'), el.getAttribute('data-area')); break;
+
+    case 'add-review-step': modalReviewStep(el.getAttribute('data-kind'), null); break;
+    case 'edit-review-step': {
+      const k = el.getAttribute('data-kind');
+      const c = reviewCustom(k).find(x=>x.id===id);
+      if(c) modalReviewStep(k, c);
+      break;
+    }
+    case 'save-review-step': {
+      const k = el.getAttribute('data-kind');
+      const what = (qs('#rv-what').value||'').trim();
+      if(!what){ pushToast('Give the step a name first'); break; }
+      const why = (qs('#rv-why').value||'').trim();
+      const where = (qs('#rv-where').value||'').trim() || '—';
+      const c = id ? reviewCustom(k).find(x=>x.id===id) : null;
+      if(c){
+        // The tick is keyed off the step's text, so a rename would strand it.
+        // Carry it across: renaming a step is not un-doing it.
+        if(c.what !== what){
+          const ticks = reviewTicks(k);
+          const oldKey = reviewKey(REVIEW_MINE, c.what), newKey = reviewKey(REVIEW_MINE, what);
+          if(ticks.done && ticks.done[oldKey]){ ticks.done[newKey] = true; delete ticks.done[oldKey]; }
+        }
+        Object.assign(c, {what, why, where});
+      }
+      else reviewCustom(k).push({ id:uid(), what, why, where });
+      closeModal(); persist();
+      break;
+    }
+    case 'delete-review-step': {
+      const k = el.getAttribute('data-kind');
+      const arr = reviewCustom(k);
+      const i = arr.findIndex(x=>x.id===id);
+      if(i>=0 && confirm(`Delete "${arr[i].what}" from the ${k} list?`)){
+        // Drop the step's tick with it, or the period store keeps a key nothing owns.
+        const key = reviewKey(REVIEW_MINE, arr[i].what);
+        arr.splice(i,1);
+        const ticks = reviewTicks(k);
+        if(ticks.done) delete ticks.done[key];
+        persist();
+      }
+      break;
+    }
+    case 'hide-review-step': {
+      const k = el.getAttribute('data-kind'), key = el.getAttribute('data-key');
+      if(!isReviewHidden(k, key)) reviewHidden(k).push(key);
+      persist();
+      pushToast('Hidden — restore it from the bottom of the list');
+      break;
+    }
+    case 'restore-review-steps': modalRestoreReviewSteps(el.getAttribute('data-kind')); break;
+    case 'restore-review-step': {
+      const k = el.getAttribute('data-kind'), key = el.getAttribute('data-key');
+      const arr = reviewHidden(k);
+      if(key==='*') arr.length = 0;
+      else { const i = arr.indexOf(key); if(i>=0) arr.splice(i,1); }
+      closeModal(); persist();
+      break;
+    }
+
+    case 'new-recurrence': modalRecurrence(null); break;
+    case 'edit-recurrence': { const r = seriesById(id); if(r) modalRecurrence(r); break; }
+    case 'rc-type-changed': {
+      const v = el.value;
+      const show = (sel, on)=>{ const n = qs(sel); if(n) n.style.display = on ? '' : 'none'; };
+      show('#rc-days-wrap',  v==='weekly');
+      show('#rc-month-wrap', v==='yearly');
+      show('#rc-dom-wrap',   v==='monthly' || v==='yearly');
+      break;
+    }
+    case 'toggle-rc-day': el.classList.toggle('on'); break;
+    case 'save-recurrence': {
+      const form = readRecurrenceForm();
+      if(!form.title){ pushToast('Give it a name first'); break; }
+      const existing = id ? seriesById(id) : null;
+      if(existing){
+        Object.assign(existing, form);
+        // Editing an unpaused cadence means the owner wants it running again.
+        if(existing.paused && seriesOutstanding(existing.id).length < RECUR_CAP){ existing.paused=false; existing.pausedReason=null; }
+      } else {
+        newRecurrence(form);
+      }
+      closeModal();
+      const made = materialiseRecurring();
+      persist();
+      pushToast(made.created? `Saved — ${made.created} already due, added to your Inbox` : 'Saved');
+      break;
+    }
+    case 'toggle-recurrence-pause': {
+      const r = seriesById(id);
+      if(r){
+        r.paused = !r.paused;
+        r.pausedReason = null;
+        if(!r.paused){
+          // Resuming catches up on everything missed while it was off, up to the cap.
+          const made = materialiseRecurring();
+          if(made.created) pushToast(`Resumed — ${made.created} caught up`);
+        }
+        persist();
+      }
+      break;
+    }
+    case 'delete-recurrence': {
+      const r = seriesById(id);
+      if(!r) break;
+      const open = seriesOutstanding(r.id).length;
+      if(!confirm(`Delete "${r.title}"?\n\nThe cadence stops. ${open? `The ${open} task${open===1?'':'s'} it already created stay in your Inbox.` : 'No open tasks were created by it.'}`)) break;
+      const i = recurrences().indexOf(r);
+      if(i>=0) recurrences().splice(i,1);
+      persist();
+      break;
+    }
+    case 'recurring-filter': ui.recurringFilter = el.getAttribute('data-f'); render(); break;
+    case 'open-series': { const r = seriesById(el.getAttribute('data-series')); if(r) modalRecurrence(r); break; }
     case 'open-habit-report': { const h = state.state.habits.find(x=>x.id===id); if(h) modalHabitDetail(h); break; }
     case 'edit-area': { const a = state.state.lifeAreas.find(x=>x.name===el.getAttribute('data-area')); if(a) modalEditArea(a); break; }
     case 'confirm-edit-area': {
@@ -3553,7 +4134,10 @@ function handleAction(action, el){
       const daysWrap = qs('#hb-freq-days-wrap');
       const targetWrap = qs('#hb-freq-target-wrap');
       if(daysWrap) daysWrap.style.display = v==='days' ? '' : 'none';
-      if(targetWrap) targetWrap.style.display = v==='weekly' ? '' : 'none';
+      if(targetWrap) targetWrap.style.display = (v==='weekly'||v==='monthly') ? '' : 'none';
+      const lbl = qs('#hb-freq-target-label'), num = qs('#hb-freq-target');
+      if(lbl) lbl.textContent = 'Times per ' + (v==='monthly' ? 'month' : 'week');
+      if(num){ num.max = v==='monthly' ? 31 : 7; if(+num.value > +num.max) num.value = num.max; }
       break;
     }
     case 'toggle-hb-day': el.classList.toggle('on'); break;
@@ -3637,6 +4221,7 @@ function boot(){
   const hadLocal = !!localStorage.getItem(STATE_KEY);
   state = loadRoot();
   inactiveProjects = loadInactive();
+  catchUpRecurring();
   render();
   scheduleMidnightRollover();
 
@@ -3647,7 +4232,7 @@ function boot(){
     primaryPull = db.collection('snapshots').doc('primary').get()
       .then(snap=>{
         const cloud = snap.exists && snap.data().data;
-        if(cloud && cloud.state){ localStorage.setItem(STATE_KEY, JSON.stringify(cloud)); state = loadRoot(); render(); }
+        if(cloud && cloud.state){ localStorage.setItem(STATE_KEY, JSON.stringify(cloud)); state = loadRoot(); catchUpRecurring(); render(); }
       }).catch(()=>{ pushToast('⚠️ Could not reach cloud — using local data'); });
   } else {
     cloudPushDebounced();

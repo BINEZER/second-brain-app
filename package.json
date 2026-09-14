@@ -1,9 +1,9 @@
 {
   "name": "second-brain-app",
   "private": true,
-  "description": "Personal Second Brain — a single-file app served by Firebase Hosting.",
+  "description": "Personal Second Brain \u2014 a single-file app served by Firebase Hosting.",
   "scripts": {
-    "test": "node tests/syntax.test.js && node tests/analytics.test.js && node tests/import.test.js",
+    "test": "node tests/syntax.test.js && node tests/analytics.test.js && node tests/import.test.js && node tests/recurring.test.js",
     "test:ui": "node tests/ui.test.js",
     "test:all": "npm test && npm run test:ui",
     "serve": "node serve.js"
