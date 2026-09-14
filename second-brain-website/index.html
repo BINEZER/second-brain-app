@@ -199,12 +199,24 @@
       .effort-chip:hover{border-color:var(--c-focus);color:var(--c-focus)}
       .rollup-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(112px,1fr));gap:10px;margin-bottom:14px}
       .rollup-tile{background:var(--c-surface);border:1px solid var(--c-border);border-radius:var(--radius-lg);padding:12px 14px}
+      button.rollup-tile{width:100%;text-align:left;font:inherit;cursor:pointer;display:block;transition:border-color .12s,background .12s}
+      button.rollup-tile:hover{border-color:var(--c-border-strong);background:var(--c-surface-alt)}
+      button.rollup-tile:focus-visible{outline:2px solid var(--c-focus);outline-offset:2px}
+      .rollup-tile .drill{font-size:10px;font-weight:700;color:var(--c-text-muted);margin-top:6px;opacity:.75}
       .rollup-tile .v{font-family:'JetBrains Mono',monospace;font-size:21px;font-weight:700;color:var(--c-text);line-height:1.1}
       .rollup-tile .k{font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--c-text-muted);margin-top:5px}
       .mini-table{width:100%;border-collapse:collapse;font-size:12.5px;margin-bottom:4px}
       .mini-table th{text-align:left;font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--c-text-muted);padding:0 10px 7px 0;font-weight:700}
       .mini-table td{padding:7px 10px 7px 0;border-top:1px solid var(--c-border);vertical-align:middle}
       .mini-table td.num{font-family:'JetBrains Mono',monospace;text-align:right;padding-right:0;white-space:nowrap}
+      /* A numeric header must sit directly over its numbers: same alignment AND
+         same right edge, or the column reads as two columns that drifted apart. */
+      .mini-table th.num{text-align:right;padding-right:0;white-space:nowrap}
+      .mini-table th.num,.mini-table td.num{font-variant-numeric:tabular-nums}
+      .mini-table-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
+      .mini-table tr.row-link{cursor:pointer}
+      .mini-table tr.row-link:hover td{background:var(--c-surface-alt)}
+      .mini-table tr.row-link td:first-child{border-top-left-radius:8px;border-bottom-left-radius:8px}
       .project-body{border-top:1px solid var(--c-border);padding:16px 18px;background:var(--c-surface-alt)}
       .sub-list{margin-bottom:12px}
       .sub-row{display:flex;align-items:center;gap:10px;padding:6px 0;font-size:13.5px}
@@ -928,6 +940,65 @@ function portfolioStats(list){
     health, byArea
   };
 }
+
+/* Every roll-up number is a question: which projects is this? Each tile and each
+   domain row drills into the list behind it, so a "1 off track" is never a dead end.
+   `pick` takes the {p,st} rows portfolioStats already computed — no recount, so the
+   list can never disagree with the tile it came from. */
+const ROLLUP_DRILLS = {
+  weighted: {
+    label: 'Weighted complete',
+    blurb: port => `${port.weightDone} of ${port.weightTotal} effort points closed across ${port.plannedCount} measurable project${port.plannedCount===1?'':'s'}. Big projects move this number more than small ones.`,
+    empty: 'No project has been broken into steps yet, so there is no weighted percentage to explain.',
+    pick: rows => rows.filter(r=>r.st.hasPlan),
+    sort: (a,b) => (b.st.weightTotal-b.st.weightDone)-(a.st.weightTotal-a.st.weightDone),
+    note: st => `${st.weightDone}/${st.weightTotal} points · ${st.weightTotal-st.weightDone} left`
+  },
+  average: {
+    label: 'Average project',
+    blurb: port => `The plain average of each measurable project's own percentage — every project counts once, whatever its size. Weighted, the same book of work reads ${port.weightedPct==null?'—':port.weightedPct+'%'}.`,
+    empty: 'No project has been broken into steps yet, so there is nothing to average.',
+    pick: rows => rows.filter(r=>r.st.hasPlan),
+    sort: (a,b) => a.st.pct-b.st.pct,
+    note: st => `${st.pct}% · ${st.done}/${st.total} steps`
+  },
+  offtrack: {
+    label: 'Off track',
+    blurb: () => 'Less work done than time spent, or already past the due date. Variance is percentage points: -20 means you are twenty points behind where the calendar says you should be.',
+    empty: 'Nothing is off track — every measurable project is level with its schedule or ahead of it.',
+    pick: rows => rows.filter(r=>r.st.health==='behind'||r.st.health==='risk'||r.st.health==='overdue'),
+    sort: (a,b) => (a.st.variance==null?99:a.st.variance)-(b.st.variance==null?99:b.st.variance),
+    note: st => `${st.pct}% done vs ${st.timePct==null?'—':Math.round(st.timePct)+'%'} of the time`
+       + (st.variance!=null?` · ${st.variance>0?'+':''}${st.variance}pts`:'')
+       + (st.daysLeft!=null?` · ${st.daysLeft<0?Math.abs(st.daysLeft)+'d overdue':st.daysLeft+'d left'}`:''),
+    // The note already carries the deadline; a due chip beside it only restates it.
+    hideDue: true
+  },
+  stalled: {
+    label: `Stalled ${STALL_DAYS}d+`,
+    blurb: () => `No step has closed in ${STALL_DAYS} days or more. The project may still be on schedule — stalled is about movement, not deadlines.`,
+    empty: `Nothing has stalled — every measurable project has closed a step in the last ${STALL_DAYS} days.`,
+    pick: rows => rows.filter(r=>r.st.stalled),
+    sort: (a,b) => b.st.daysSinceActivity-a.st.daysSinceActivity,
+    note: st => `${st.daysSinceActivity}d since a step closed · ${st.pct}% done`
+  },
+  noplan: {
+    label: 'Not broken down',
+    blurb: () => 'No milestones and no tasks, so these have no measurable completion — they are not 0% done, they are unmeasured, and they are excluded from every percentage above. Add steps to bring them into the roll-up.',
+    empty: 'Every project has been broken into steps.',
+    pick: rows => rows.filter(r=>!r.st.hasPlan),
+    sort: (a,b) => a.p.title.localeCompare(b.p.title),
+    note: () => 'No milestones or tasks yet'
+  },
+  all: {
+    label: 'Projects',
+    blurb: port => `Every active project. ${port.plannedCount} measurable, ${port.noPlanCount} not broken down. Archived projects are not counted here.`,
+    empty: 'No active projects.',
+    pick: rows => rows,
+    sort: (a,b) => HEALTH_ORDER.indexOf(a.st.health)-HEALTH_ORDER.indexOf(b.st.health) || (b.st.weightTotal-a.st.weightTotal),
+    note: st => st.hasPlan ? `${st.pct}% · ${st.done}/${st.total} steps · ${st.weightDone}/${st.weightTotal} points` : 'No milestones or tasks yet'
+  }
+};
 
 /* ---------- shared progress UI fragments ---------- */
 function healthChip(st){
@@ -1946,18 +2017,24 @@ function renderReportsProjectsView(){
   const rows = reportProjectRows();
   const f = ui.projectHealthFilter;
   const chip = (key,label,count)=>`<button class="chip ${f===key?'on':''}" data-action="project-health-filter" data-health="${key}">${label}${count!=null?` (${count})`:''}</button>`;
+  // Each tile is a real <button> so it is reachable by keyboard, not just by mouse.
+  const tile = (key,value,label,colour,hint)=>`<button class="rollup-tile" data-action="rollup-drill" data-key="${key}"${hint?` title="${esc(hint)}"`:''}>
+      <div class="v"${colour?` style="color:${colour}"`:''}>${value}</div>
+      <div class="k">${label}</div>
+      <div class="drill">View →</div>
+    </button>`;
 
   if(!all.length) return `<div class="empty">No projects yet.</div>`;
 
   return `
     <div class="section-label" style="margin-top:0">Portfolio roll-up</div>
     <div class="rollup-grid">
-      <div class="rollup-tile"><div class="v">${port.weightedPct==null?'—':port.weightedPct+'%'}</div><div class="k" title="All remaining effort across every measurable project, weighted by step size">Weighted complete</div></div>
-      <div class="rollup-tile"><div class="v">${port.simplePct==null?'—':port.simplePct+'%'}</div><div class="k" title="Plain average of each project's own percentage, ignoring size">Average project</div></div>
-      <div class="rollup-tile"><div class="v" style="color:${port.offTrack?'var(--c-danger)':'inherit'}">${port.offTrack}</div><div class="k">Off track</div></div>
-      <div class="rollup-tile"><div class="v" style="color:${port.stalledCount?'var(--c-warn)':'inherit'}">${port.stalledCount}</div><div class="k">Stalled ${STALL_DAYS}d+</div></div>
-      <div class="rollup-tile"><div class="v" style="color:${port.noPlanCount?'var(--c-warn)':'inherit'}">${port.noPlanCount}</div><div class="k">Not broken down</div></div>
-      <div class="rollup-tile"><div class="v">${port.total}</div><div class="k">Projects</div></div>
+      ${tile('weighted', port.weightedPct==null?'—':port.weightedPct+'%', 'Weighted complete', '', 'All remaining effort across every measurable project, weighted by step size')}
+      ${tile('average', port.simplePct==null?'—':port.simplePct+'%', 'Average project', '', "Plain average of each project's own percentage, ignoring size")}
+      ${tile('offtrack', port.offTrack, 'Off track', port.offTrack?'var(--c-danger)':'')}
+      ${tile('stalled', port.stalledCount, `Stalled ${STALL_DAYS}d+`, port.stalledCount?'var(--c-warn)':'')}
+      ${tile('noplan', port.noPlanCount, 'Not broken down', port.noPlanCount?'var(--c-warn)':'')}
+      ${tile('all', port.total, 'Projects', '')}
     </div>
     <div class="view-sub" style="margin-bottom:16px">
       ${port.plannedCount} of ${port.total} project${port.total===1?'':'s'} measurable · ${port.weightDone} of ${port.weightTotal} effort points closed.
@@ -1967,19 +2044,22 @@ function renderReportsProjectsView(){
     <div class="section-label">By domain</div>
     ${port.byArea.some(a=>a.pct!=null)? chartCard('chart-portfolio', Math.max(130, port.byArea.filter(a=>a.pct!=null).length*34)) : ''}
     <div class="card" style="margin-bottom:20px;padding:14px 16px">
+      <div class="mini-table-wrap">
       <table class="mini-table">
         <thead><tr><th>Domain</th><th class="num">Projects</th><th class="num">Weighted %</th><th class="num">Effort done</th><th class="num">Off track</th><th class="num">No plan</th></tr></thead>
         <tbody>
-          ${port.byArea.map(a=>`<tr>
+          ${port.byArea.map(a=>`<tr class="row-link" data-action="rollup-drill" data-key="all" data-area="${esc(a.area)}" title="Show the projects in ${esc(a.area)}">
             <td><span class="chip" style="${catStyle(a.area)}">${esc(a.area)}</span></td>
             <td class="num">${a.count}</td>
             <td class="num"><b>${a.pct==null?'—':a.pct+'%'}</b></td>
             <td class="num">${a.weightDone}/${a.weightTotal||0}</td>
-            <td class="num" style="${a.offTrack?'color:var(--c-danger);font-weight:700':''}">${a.offTrack}</td>
-            <td class="num" style="${a.noPlan?'color:var(--c-warn);font-weight:700':''}">${a.noPlan}</td>
+            <td class="num" data-action="rollup-drill" data-key="offtrack" data-area="${esc(a.area)}" style="${a.offTrack?'color:var(--c-danger);font-weight:700':''}">${a.offTrack}</td>
+            <td class="num" data-action="rollup-drill" data-key="noplan" data-area="${esc(a.area)}" style="${a.noPlan?'color:var(--c-warn);font-weight:700':''}">${a.noPlan}</td>
           </tr>`).join('')}
         </tbody>
       </table>
+      </div>
+      <div class="view-sub" style="margin:8px 0 0">Click a domain for the projects behind its numbers.</div>
     </div>
 
     <div class="section-label">Projects</div>
@@ -2163,6 +2243,41 @@ function closeModal(){
   if(habitTrendChart){ try{ habitTrendChart.destroy(); }catch(e){} habitTrendChart=null; }
   if(projectTrendChart){ try{ projectTrendChart.destroy(); }catch(e){} projectTrendChart=null; }
   qs('#modal-root').innerHTML='';
+}
+
+/* The list behind a roll-up number. `area` narrows it to one domain, which is
+   what a click on a By-domain row does. */
+function modalRollupDrill(key, area){
+  const d = ROLLUP_DRILLS[key] || ROLLUP_DRILLS.all;
+  const scoped = reportProjectList().filter(p=>!area || (p.category||'Uncategorised')===area);
+  const port = portfolioStats(scoped);
+  const list = d.pick(port.rows).slice().sort(d.sort);
+
+  const row = r => `<div class="project-card" style="margin-bottom:8px">
+    <div class="project-head" data-action="open-project-report" data-id="${r.p.id}">
+      <div class="item-main">
+        <div class="project-title">${esc(r.p.title)}</div>
+        <div class="item-meta">
+          <span class="chip" style="${catStyle(r.p.category)}">${esc(r.p.category)}</span>
+          ${healthChip(r.st)}
+          ${stalledChip(r.st)}
+          <span>${esc(d.note(r.st, r.p))}</span>
+          ${r.p.dueDate && !d.hideDue? `<span>${fmtDue(r.p.dueDate)}</span>`:''}
+        </div>
+        ${progressBar(r.st)}
+      </div>
+    </div>
+  </div>`;
+
+  openModal(`
+    <h3>${esc(d.label)}${area? ' — '+esc(area):''} <span style="font-family:'JetBrains Mono',monospace">(${list.length})</span></h3>
+    <div class="view-sub" style="margin-bottom:14px">${esc(d.blurb(port))}</div>
+    ${list.length ? list.map(row).join('') : `<div class="empty">${esc(d.empty)}</div>`}
+    <div class="view-sub" style="margin-top:12px">Click any project for its full report.</div>
+    <div class="modal-actions">
+      ${key!=='all' || area ? `<button class="btn" data-action="rollup-drill" data-key="all">All projects</button>` : ''}
+      <button class="btn btn-primary" data-action="close-modal">Close</button>
+    </div>`);
 }
 
 function modalConvertToProject(item){
@@ -3164,6 +3279,7 @@ function handleAction(action, el){
 
     case 'open-area': { const a = state.state.lifeAreas.find(x=>x.name===el.getAttribute('data-area')); if(a) modalAreaDetail(a); break; }
     case 'open-project-report': { const p = byId(id); if(p) modalProjectDetail(p); break; }
+    case 'rollup-drill': modalRollupDrill(el.getAttribute('data-key'), el.getAttribute('data-area')); break;
     case 'open-habit-report': { const h = state.state.habits.find(x=>x.id===id); if(h) modalHabitDetail(h); break; }
     case 'edit-area': { const a = state.state.lifeAreas.find(x=>x.name===el.getAttribute('data-area')); if(a) modalEditArea(a); break; }
     case 'confirm-edit-area': {

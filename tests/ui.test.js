@@ -175,6 +175,56 @@ async function launch() {
     ok(`${tab} exports`, !!got, got ? got.suggestedFilename() : 'no download');
   }
 
+  console.log('\nREPORTS — numeric headers sit over their numbers');
+  await page.click('[data-tab="projects"]');
+  await page.waitForSelector('.mini-table');
+  /* A numeric column whose header is left-aligned while its cells are right-aligned
+     reads as two columns that drifted apart. Assert the rendered right edges agree,
+     not just that a class is present. */
+  const cols = await page.evaluate(() => {
+    const t = document.querySelector('.mini-table');
+    const ths = [...t.querySelectorAll('th')];
+    const tds = [...t.querySelector('tbody tr').querySelectorAll('td')];
+    const rightEdge = el => { const r = document.createRange(); r.selectNodeContents(el); return r.getBoundingClientRect().right; };
+    return ths.map((th, i) => ({
+      col: th.textContent.trim(), num: th.classList.contains('num'),
+      align: getComputedStyle(th).textAlign,
+      drift: Math.abs(rightEdge(th) - rightEdge(tds[i]))
+    }));
+  });
+  cols.filter(c => c.num).forEach(c =>
+    ok(`"${c.col}" header is flush with its numbers`, c.align === 'right' && c.drift <= 1, c));
+  ok('the text column stays left', cols[0].align === 'left' && !cols[0].num, cols[0]);
+
+  console.log('\nROLL-UP — every number drills into the projects behind it');
+  ok('all six tiles are buttons', await page.locator('button.rollup-tile[data-action="rollup-drill"]').count() === 6,
+    await page.locator('button.rollup-tile[data-action="rollup-drill"]').count());
+  await page.click('button.rollup-tile[data-key="offtrack"]');
+  await page.waitForSelector('.modal');
+  const drill = await page.locator('.modal').innerText();
+  ok('the off-track tile lists the off-track project', /Off track \(1\)/.test(drill) && /Site installation/.test(drill),
+    drill.split('\n').slice(0, 2).join(' | '));
+  ok('  and only that one', await page.locator('.modal .project-card').count() === 1,
+    await page.locator('.modal .project-card').count());
+  await page.locator('.modal .project-card').first().click();
+  await page.waitForTimeout(300);
+  ok('a row opens that project\'s full report', /milestones/i.test(await page.locator('.modal').innerText()));
+  await page.click('.modal-actions [data-action="close-modal"]');
+  await page.waitForTimeout(200);
+  // A slice with nothing in it must say so, not render a blank box.
+  await page.locator('.mini-table tr.row-link').filter({ hasText: 'Home' }).first().locator('td.num').nth(3).click();
+  await page.waitForSelector('.modal');
+  ok('an empty slice explains itself', /Nothing is off track/.test(await page.locator('.modal').innerText()));
+  await page.click('.modal-actions [data-action="close-modal"]');
+  await page.waitForTimeout(200);
+  // Keyboard reachability is why the tiles are <button>, not <div>.
+  await page.locator('button.rollup-tile[data-key="noplan"]').focus();
+  await page.keyboard.press('Enter');
+  await page.waitForTimeout(300);
+  ok('a tile opens from the keyboard', /Not broken down/.test(await page.locator('.modal').innerText()));
+  await page.click('.modal-actions [data-action="close-modal"]');
+  await page.waitForTimeout(200);
+
   console.log('\nREVIEW — checklists must never award XP');
   await page.click('[data-action="nav"][data-view="review"]');
   await page.waitForSelector('.rv-step');
