@@ -1,0 +1,120 @@
+'use strict';
+/*
+  Recurring series: the date maths, and the rule the owner chose — missed cycles
+  stack rather than collapsing into one. The cap is the only thing that stops a
+  forgotten daily chore from creating a row for every day of the year.
+*/
+require('./harness');
+
+let fails = 0, passes = 0;
+const ok = (name, cond, extra) => {
+  if (cond) passes++;
+  else { fails++; console.log('FAIL:', name, extra !== undefined ? JSON.stringify(extra) : ''); }
+};
+const eq = (name, a, b) => ok(name, JSON.stringify(a) === JSON.stringify(b), { got: a, want: b });
+
+const dates = __in('recurrenceDates');
+const materialise = () => __in('materialiseRecurring')();
+const addSeries = p => __in('newRecurrence')(p);
+const iso = d => __in('fmtISO')(d);
+const daysAgo = n => iso(__in('addDays')(new Date(), -n));
+const CAP = __in('RECUR_CAP');
+
+/* ---- the calendar, including the cases that usually go wrong ---- */
+eq('monthly on the 15th',
+  dates({ type: 'monthly', interval: 1, dayOfMonth: 15, anchor: '2026-01-15' }, '2026-01-01', '2026-04-30'),
+  ['2026-01-15', '2026-02-15', '2026-03-15', '2026-04-15']);
+
+// The 31st must land on the last day of a short month, never skip it entirely.
+eq('monthly on the 31st clamps into short months',
+  dates({ type: 'monthly', interval: 1, dayOfMonth: 31, anchor: '2026-01-31' }, '2026-01-01', '2026-04-30'),
+  ['2026-01-31', '2026-02-28', '2026-03-31', '2026-04-30']);
+
+eq('every second month',
+  dates({ type: 'monthly', interval: 2, dayOfMonth: 1, anchor: '2026-01-01' }, '2026-01-01', '2026-06-30'),
+  ['2026-01-01', '2026-03-01', '2026-05-01']);
+
+eq('weekly on two days',
+  dates({ type: 'weekly', interval: 1, days: [0, 4], anchor: '2026-09-14' }, '2026-09-14', '2026-09-27'),
+  ['2026-09-14', '2026-09-18', '2026-09-21', '2026-09-25']);
+
+eq('fortnightly counts whole weeks from the anchor',
+  dates({ type: 'weekly', interval: 2, days: [0], anchor: '2026-09-14' }, '2026-09-14', '2026-10-19'),
+  ['2026-09-14', '2026-09-28', '2026-10-12']);
+
+eq('every third day',
+  dates({ type: 'daily', interval: 3, anchor: '2026-09-14' }, '2026-09-14', '2026-09-25'),
+  ['2026-09-14', '2026-09-17', '2026-09-20', '2026-09-23']);
+
+eq('yearly', dates({ type: 'yearly', interval: 1, month: 6, dayOfMonth: 4, anchor: '2026-07-04' }, '2026-01-01', '2029-12-31'),
+  ['2026-07-04', '2027-07-04', '2028-07-04', '2029-07-04']);
+
+// A 29 February series must still fire in non-leap years.
+eq('29 February clamps to the 28th in common years',
+  dates({ type: 'yearly', interval: 1, month: 1, dayOfMonth: 29, anchor: '2024-02-29' }, '2024-01-01', '2027-12-31'),
+  ['2024-02-29', '2025-02-28', '2026-02-28', '2027-02-28']);
+
+eq('nothing is produced before the anchor',
+  dates({ type: 'monthly', interval: 1, dayOfMonth: 5, anchor: '2026-06-05' }, '2026-01-01', '2026-08-31'),
+  ['2026-06-05', '2026-07-05', '2026-08-05']);
+
+/* ---- missed cycles stack ---- */
+resetApp();
+addSeries({ title: 'File VAT', type: 'monthly', interval: 1, dayOfMonth: 15, anchor: daysAgo(160) });
+materialise();
+const vat = items().filter(i => i.title === 'File VAT');
+ok('five months missed produces one task per month', vat.length >= 5, vat.length);
+eq('  each with a distinct due date', new Set(vat.map(i => i.dueDate)).size, vat.length);
+ok('  all still open', vat.every(i => i.status === 'open'));
+ok('  all linked to the series', vat.every(i => i.seriesId));
+
+const n = items().length;
+materialise();
+eq('running again creates nothing', items().length, n);
+
+/* ---- the cap is what keeps stacking survivable ---- */
+resetApp();
+const runaway = addSeries({ title: 'Bins', type: 'daily', interval: 1, anchor: daysAgo(300) });
+materialise();
+eq('a year-old daily series stops at the cap', items().filter(i => i.title === 'Bins').length, CAP);
+ok('  and pauses itself rather than flooding on', runaway.paused === true);
+ok('  and says why on its face', /outstanding/.test(runaway.pausedReason || ''), runaway.pausedReason);
+
+// Clearing the backlog lets it pick up again.
+items().filter(i => i.title === 'Bins').slice(0, 20).forEach(i => { i.status = 'done'; i.completedAt = new Date().toISOString(); });
+runaway.paused = false; runaway.pausedReason = null;
+ok('un-pausing catches up once there is room', materialise().created > 0);
+
+/* ---- what must never happen ---- */
+resetApp();
+addSeries({ title: 'Future', type: 'monthly', interval: 1, dayOfMonth: 1, anchor: iso(__in('addDays')(new Date(), 40)) });
+materialise();
+eq('a future anchor creates nothing yet', items().filter(i => i.title === 'Future').length, 0);
+
+resetApp();
+const paused = addSeries({ title: 'Paused', type: 'daily', interval: 1, anchor: daysAgo(10) });
+paused.paused = true;
+materialise();
+eq('a paused series is inert', items().filter(i => i.title === 'Paused').length, 0);
+
+/* ---- the template's fields reach every instance ---- */
+resetApp();
+addSeries({ title: 'Payroll', type: 'monthly', dayOfMonth: 1, anchor: daysAgo(70), category: 'Operations',
+  priority: 'high', effort: 'M', assignee: 'Finance lead' });
+materialise();
+const pay = items().find(i => i.title === 'Payroll');
+eq('category carries', pay.category, 'Operations');
+eq('priority carries', pay.priority, 'high');
+eq('effort carries', pay.effort, 'M');
+eq('owner carries', pay.assignee, 'Finance lead');
+eq('the due date is the occurrence date', pay.dueDate, pay.occursOn);
+
+/* ---- cadence reads as English ---- */
+const label = __in('recurrenceLabel');
+eq('label: monthly', label({ type: 'monthly', interval: 1, dayOfMonth: 15 }), 'Monthly on the 15th');
+eq('label: every other month', label({ type: 'monthly', interval: 2, dayOfMonth: 3 }), 'Every 2 months on the 3rd');
+eq('label: daily', label({ type: 'daily', interval: 1 }), 'Every day');
+eq('label: weekly', label({ type: 'weekly', interval: 1, days: [0, 2] }), 'Every week on Mon, Wed');
+
+console.log(`recurring: ${passes} passed, ${fails} failed`);
+process.exit(fails ? 1 : 0);
