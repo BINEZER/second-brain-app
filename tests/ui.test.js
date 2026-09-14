@@ -27,6 +27,23 @@ const ok = (n, c, x) => {
   if (!c) fails++;
 };
 
+/* A real pointer drag: press the handle, move past the slop threshold, release
+   over the target row. Mirrors what a hand does — nothing is dispatched directly. */
+async function dragRow(page, rowSel, fromIdx, toIdx) {
+  const rows = page.locator(rowSel);
+  const handle = rows.nth(fromIdx).locator('[data-dnd-handle]');
+  const hb = await handle.boundingBox();
+  const tb = await rows.nth(toIdx).boundingBox();
+  const x = hb.x + hb.width / 2;
+  await page.mouse.move(x, hb.y + hb.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(x, hb.y + hb.height / 2 + 12, { steps: 3 });
+  // Aim past the target's midpoint in the direction of travel.
+  await page.mouse.move(x, toIdx > fromIdx ? tb.y + tb.height - 4 : tb.y + 4, { steps: 8 });
+  await page.mouse.up();
+  await page.waitForTimeout(400);
+}
+
 function waitForServer(tries = 40) {
   return new Promise((resolve, reject) => {
     const attempt = n => {
@@ -126,6 +143,82 @@ async function launch() {
   ok('the card advances', (await page.locator('.triage-title').innerText()) !== card);
   await page.click('[data-action="exit-triage"]');
   await page.waitForTimeout(300);
+
+  console.log('\nNOW — the app never puts anything here, and never replaces anything');
+  await page.click('[data-action="nav"][data-view="now"]');
+  await page.waitForTimeout(300);
+  ok('Now starts empty — nothing is auto-filled', (await st()).settings.nowPins.length === 0,
+    (await st()).settings.nowPins.length);
+  await page.click('[data-action="nav"][data-view="inbox"]');
+  for (const t of ['Charlie', 'Delta', 'Echo', 'Foxtrot']) {
+    await page.fill('#capture-input', t);
+    await page.click('[data-action="capture-add"]');
+    await page.waitForTimeout(150);
+  }
+  for (let i = 0; i < 4; i++) {
+    await page.locator('.item-row').nth(i).locator('[data-action="toggle-pin"]').click();
+    await page.waitForTimeout(200);
+  }
+  // The old build refused a fourth pin with "Now is full (3/3)".
+  ok('a fourth pin is allowed', (await st()).settings.nowPins.length === 4, (await st()).settings.nowPins.length);
+  await page.click('[data-action="nav"][data-view="now"]');
+  await page.waitForTimeout(300);
+  const pinsBefore = await page.locator('.focus-card .focus-title').allInnerTexts();
+  await page.locator('.focus-card').first().locator('[data-action="toggle-pin"]').click();
+  await page.waitForTimeout(400);
+  const pinsAfter = await page.locator('.focus-card .focus-title').allInnerTexts();
+  ok('unpinning removes exactly one', pinsAfter.length === pinsBefore.length - 1, { pinsBefore, pinsAfter });
+  ok('  and nothing is substituted in', pinsAfter.join('|') === pinsBefore.slice(1).join('|'),
+    { pinsBefore, pinsAfter });
+  await page.locator('.focus-card').first().locator('.check').click();
+  await page.waitForTimeout(500);
+  const pinsDone = await page.locator('.focus-card .focus-title').allInnerTexts();
+  ok('completing a pin frees its slot', pinsDone.length === pinsAfter.length - 1, pinsDone);
+  ok('  and still substitutes nothing', pinsDone.join('|') === pinsAfter.slice(1).join('|'),
+    { pinsAfter, pinsDone });
+  await dragRow(page, '.focus-card', 0, 1);
+  const pinsDrag = await page.locator('.focus-card .focus-title').allInnerTexts();
+  ok('Now pins reorder by drag', pinsDrag[1] === pinsDone[0] && pinsDrag[0] === pinsDone[1],
+    { before: pinsDone, after: pinsDrag });
+
+  console.log('\nDRAG TO REORDER — every list, across more than one row');
+  await page.click('[data-action="nav"][data-view="inbox"]');
+  await page.waitForTimeout(300);
+  const inb0 = await page.locator('.item-row .item-title').allInnerTexts();
+  await dragRow(page, '.item-row', 0, 2);
+  const inb1 = await page.locator('.item-row .item-title').allInnerTexts();
+  ok('inbox: a row drags two places down', inb1[2] === inb0[0] && inb1[0] === inb0[1],
+    { before: inb0.slice(0, 3), after: inb1.slice(0, 3) });
+  await dragRow(page, '.item-row', 2, 0);
+  ok('inbox: dragging it back restores the order',
+    (await page.locator('.item-row .item-title').allInnerTexts()).join('|') === inb0.join('|'));
+  // A drag must not swallow an ordinary click on the row.
+  await page.locator('.item-row .clickable-title').first().click();
+  await page.waitForTimeout(300);
+  ok('clicking a row still opens it', await page.locator('.modal').count() === 1);
+  await page.click('.modal-actions [data-action="close-modal"]');
+  await page.waitForTimeout(200);
+  // The arrows must still agree with the drag: both go through one reorder path.
+  const arr0 = await page.locator('.item-row .item-title').allInnerTexts();
+  await page.locator('.item-row').nth(1).locator('[data-action="move-inbox"][data-dir="-1"]').click();
+  await page.waitForTimeout(400);
+  const arr1 = await page.locator('.item-row .item-title').allInnerTexts();
+  ok('the arrows still work alongside the handle', arr1[0] === arr0[1] && arr1[1] === arr0[0],
+    { before: arr0.slice(0, 2), after: arr1.slice(0, 2) });
+
+  await page.click('[data-action="nav"][data-view="projects"]');
+  await page.waitForTimeout(300);
+  const prj0 = await page.locator('.project-title').allInnerTexts();
+  await dragRow(page, '.project-card[data-dnd-row]', 0, 2);
+  const prj1 = await page.locator('.project-title').allInnerTexts();
+  ok('projects reorder by drag', prj1[2] === prj0[0], { before: prj0, after: prj1 });
+
+  await page.click('[data-action="nav"][data-view="habits"]');
+  await page.waitForSelector('.habit-row');
+  const hb0 = await page.evaluate(() => [...document.querySelectorAll('.habit-row')].map(r => r.innerText.split('\n')[0]));
+  await dragRow(page, '.habit-row[data-dnd-row]', 0, 2);
+  const hb1 = await page.evaluate(() => [...document.querySelectorAll('.habit-row')].map(r => r.innerText.split('\n')[0]));
+  ok('habits reorder by drag', hb1[2] === hb0[0], { before: hb0, after: hb1 });
 
   console.log('\nMILESTONES — rename, delete, reorder');
   await page.click('[data-action="nav"][data-view="projects"]');
@@ -230,12 +323,50 @@ async function launch() {
   await page.waitForSelector('.rv-step');
   const tabCount = await page.locator('[data-action="review-tab"]').count();
   ok('three cadences', tabCount === 3, tabCount);
-  ok('daily is sectioned', await page.locator('.rv-sec').count() === 2);
+  const daySecs = await page.locator('.rv-sec').allInnerTexts();
+  ok('daily covers all four fronts', daySecs.length === 4
+    && /second brain/i.test(daySecs[0]) && /intelmotion/i.test(daySecs[1])
+    && /comms/i.test(daySecs[2]) && /finance/i.test(daySecs[3]),
+    daySecs.map(t => t.split('\n')[0]));
+  const dayText = await page.locator('.view').innerText();
+  ok('daily names the brain dump', /brain dump/i.test(dayText));
+  ok('daily reviews the IntelMotion app', /job board in the IntelMotion app/i.test(dayText));
+  ok('daily clears email', /decided inbox/i.test(dayText));
   const xpBefore = (await st()).gamification.xp;
   await page.locator('.rv-step .box').first().click();
   await page.waitForTimeout(400);
   ok('a tick persists', Object.keys((await st()).reviews.daily.done || {}).length === 1);
   ok('a tick awards no XP', (await st()).gamification.xp === xpBefore, { before: xpBefore, after: (await st()).gamification.xp });
+  /* Ticks are keyed by the step's text, not its position. A positional key silently
+     re-points every tick below an inserted step, so assert the key tracks content. */
+  const tickKey = Object.keys((await st()).reviews.daily.done)[0];
+  ok('the tick key is content-derived, not positional', /^k[0-9a-z]+$/.test(tickKey) && !/^s\d+i\d+$/.test(tickKey), tickKey);
+
+  await page.click('[data-action="review-tab"][data-tab="weekly"]');
+  await page.waitForTimeout(300);
+  const wkText = await page.locator('.view').innerText();
+  for (const [label, re] of [
+    ['social media', /business social accounts/i],
+    ['weekly wins', /three wins from this week/i],
+    ['what did not happen', /did not happen, and why/i],
+    ['the deep brain dump', /deep brain dump/i],
+    ['repeat breakdowns', /repeat breakdowns by lift/i],
+    ['Zipana and IntelTech', /Zipana and IntelTech/i]
+  ]) ok('weekly covers ' + label, re.test(wkText));
+
+  await page.click('[data-action="review-tab"][data-tab="monthly"]');
+  await page.waitForTimeout(300);
+  const moText = await page.locator('.view').innerText();
+  ok('monthly records the biggest wins', /three biggest wins/i.test(moText));
+  ok('monthly records a family highlight', /family highlight/i.test(moText));
+  ok('monthly reviews IntelMotion contracts', /contract renewals/i.test(moText));
+  // Each cadence keeps its own ticks.
+  await page.locator('.rv-step .box').first().click();
+  await page.waitForTimeout(400);
+  ok('monthly ticks are separate from daily', Object.keys((await st()).reviews.monthly.done || {}).length === 1
+    && Object.keys((await st()).reviews.daily.done || {}).length === 1);
+  await page.click('[data-action="review-tab"][data-tab="daily"]');
+  await page.waitForTimeout(300);
 
   console.log('\nPERSISTENCE');
   await page.reload({ waitUntil: 'domcontentloaded' });

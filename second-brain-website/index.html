@@ -205,6 +205,16 @@
       .rollup-tile .drill{font-size:10px;font-weight:700;color:var(--c-text-muted);margin-top:6px;opacity:.75}
       .rollup-tile .v{font-family:'JetBrains Mono',monospace;font-size:21px;font-weight:700;color:var(--c-text);line-height:1.1}
       .rollup-tile .k{font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--c-text-muted);margin-top:5px}
+      /* Drag to reorder. touch-action:none on the handle stops the browser
+         scrolling the page instead of letting the pointer drag the row. */
+      .drag-handle{width:26px;height:26px;border-radius:8px;border:1px solid transparent;background:transparent;
+        color:var(--c-text-muted);font-size:14px;line-height:1;cursor:grab;touch-action:none;flex-shrink:0}
+      .drag-handle:hover{background:var(--c-surface-alt);border-color:var(--c-border);color:var(--c-text-secondary)}
+      .drag-handle:active{cursor:grabbing}
+      body.dragging-active{cursor:grabbing;user-select:none}
+      [data-dnd-row].dragging{opacity:.45}
+      [data-dnd-row].drop-before{box-shadow:0 -3px 0 -1px var(--c-focus)}
+      [data-dnd-row].drop-after{box-shadow:0 3px 0 -1px var(--c-focus)}
       .mini-table{width:100%;border-collapse:collapse;font-size:12.5px;margin-bottom:4px}
       .mini-table th{text-align:left;font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--c-text-muted);padding:0 10px 7px 0;font-weight:700}
       .mini-table td{padding:7px 10px 7px 0;border-top:1px solid var(--c-border);vertical-align:middle}
@@ -351,17 +361,27 @@ const XP_TASK = 10, XP_MILESTONE = 25, XP_HABITS = 15;
 const REVIEW_LISTS = {
   daily: {
     label: 'Daily pass',
-    blurb: 'Ten to fifteen minutes, same order every day.',
+    blurb: 'Twenty minutes, same order every day. Work top to bottom and stop when you run out of time — the order is the point.',
     resets: 'clears at midnight',
     sections: [
       { name: 'Second Brain', steps: [
         ['Read today’s date and your three focus items', 'If any of the three is not what today is actually about, unpin it now.', 'Now / Today'],
         ['Log yesterday’s habits', 'Anything you forgot to tick. Use ‹ to step back a week if the day has rolled over.', 'Habits'],
         ['Tick off what you actually finished', 'Percentages, the Done log and your streak are only true if you close things when they close.', 'Projects / Inbox'],
-        ['Empty your head into the capture box', 'Everything on your mind, one line each. Do not organise while capturing.', 'Inbox'],
+        ['Brain dump — empty your head into the capture box', 'Everything on your mind, one line each, until nothing is left. Do not organise while capturing; sorting and emptying are different jobs and doing both at once does neither.', 'Inbox'],
         ['Process the unfiled inbox to zero', 'File it, convert it to a project, date it, or delete it. Do not leave it half done.', 'Inbox → Process Inbox'],
         ['Scan for anything due or overdue today', 'Anything overdue either gets done today or gets an honest new date.', 'Inbox → All open tasks'],
-        ['Pin tomorrow’s three', 'Decide before you close the laptop, so tomorrow starts already decided.', 'Now / Today']
+        ['Pin tomorrow’s three', 'Decide before you close the laptop, so tomorrow starts already decided. Nothing fills these slots by itself — what is in Now is only ever what you put there.', 'Now / Today']
+      ]},
+      { name: 'IntelMotion', steps: [
+        ['Read today’s job board in the IntelMotion app', 'Installations, services and callouts scheduled today. A job with no technician, or a technician with no job, is a problem while it is still morning and not after.', 'IntelMotion app'],
+        ['Clear new breakdown callouts', 'A stopped lift ages badly and a trapped passenger ages worse. Assign it or escalate it now — do not let it sit in a queue waiting for a meeting.', 'IntelMotion app'],
+        ['Check what is blocked on you', 'Approvals, quotes, signatures, decisions. You are the bottleneck on these by definition, so they cost the company a day each time you skip this step.', 'IntelMotion app'],
+        ['Scan the client threads that moved', 'SNDF, TPMO, Hiya and the rest. One line each if nothing changed; anything that needs an answer becomes a task before you close the tab.', 'IntelMotion app / Inbox']
+      ]},
+      { name: 'Comms', steps: [
+        ['Take email to a decided inbox', 'Decided, not empty. Every mail gets a reply, a task captured in here, or the archive. A read mail with no decision is a mail you will read again tomorrow.', 'Email'],
+        ['Ten minutes on messages', 'WhatsApp and Telegram is where the real commitments get made. Anything you agreed to becomes a task here before you put the phone down, or it did not happen.', 'Phone → Inbox']
       ]},
       { name: 'Finance', steps: [
         ['Log yesterday’s transactions — card and cash', 'Cash is what vanishes. A day old you remember it; three days old you do not.', 'Finance app'],
@@ -372,7 +392,7 @@ const REVIEW_LISTS = {
   },
   weekly: {
     label: 'Weekly review',
-    blurb: 'Forty minutes to an hour, once a week. The real one.',
+    blurb: 'Ninety minutes, once a week. The long one — and the only one that catches what the daily pass cannot see.',
     resets: 'resets every Monday',
     sections: [
       { name: 'Second Brain', steps: [
@@ -388,7 +408,28 @@ const REVIEW_LISTS = {
         ['Clear the inbox to zero', 'The weekly backstop for anything the daily pass missed.', 'Inbox → Process Inbox'],
         ['Read the open items in each life area', 'The Binder holds commitments that never became tasks.', 'Life Binder'],
         ['Set next week’s three focus items', 'Choose them now, while the whole picture is in front of you.', 'Now / Today'],
-        ['Export the portfolio report', 'Only if you are reporting to Demitu or reviewing with the family businesses this week.', 'Reports → Export']
+        ['Export the portfolio report', 'Only if you are reporting to Demitu or reviewing with the family businesses this week.', 'Reports → Export'],
+        ['Deep brain dump — the week, not the day', 'Twenty minutes, no filtering. Worries, half-ideas, the thing you keep not saying in meetings, anything about Nigist or Tamar you have been carrying. The weekly dump catches what the daily one is moving too fast to see.', 'Inbox']
+      ]},
+      { name: 'IntelMotion', steps: [
+        ['Read the week’s job completion in the app', 'Installations, services and callouts closed against what was scheduled. The gap is the real capacity number, not the one in the plan.', 'IntelMotion app'],
+        ['Work the callouts older than a week', 'An old callout is either waiting on a part, waiting on a client, or forgotten. Each needs a different answer and only one of them is acceptable.', 'IntelMotion app'],
+        ['Check repeat breakdowns by lift', 'The same unit twice in a month is a fault, not a service call. Repeat callouts eat margin and they are how a maintenance contract gets lost.', 'IntelMotion app'],
+        ['Review spare parts and lead times', 'Anything import-bound needs ordering weeks before you need it. A job held up on a part is a job you quoted and cannot invoice.', 'IntelMotion app'],
+        ['Check technician load and leave', 'Who is overloaded, who is idle, who is off next week. Do this before the schedule is built, not after it breaks.', 'IntelMotion app'],
+        ['Read the open quotes and tenders', 'What is out, what is due, what has gone quiet. A tender you missed the date on is a year of revenue.', 'IntelMotion app / Projects'],
+        ['Check Zipana and IntelTech', 'The two expansions get their own five minutes, or the elevator business quietly eats all of it. That is how side ventures die.', 'Projects']
+      ]},
+      { name: 'Comms & Social', steps: [
+        ['Take email to zero for the week', 'The backstop for everything the daily pass triaged but did not finish.', 'Email'],
+        ['Unsubscribe and mute', 'Every newsletter you did not read and every thread you do not need. Two minutes a week is what keeps the daily pass to ten.', 'Email'],
+        ['Review the business social accounts', 'IntelMotion and Zipana: what went out, what came back, what a customer asked in a comment and nobody answered. An unanswered comment in public is a support ticket with an audience.', 'Social'],
+        ['Decide next week’s posts', 'Decide once, weekly, on a timer. Deciding daily is how social media turns into an hour you did not plan to spend.', 'Social → Inbox']
+      ]},
+      { name: 'Wins & Highlights', steps: [
+        ['Write down three wins from this week', 'Specific and finished — "signed the SNDF renewal", not "made progress". A week with no recorded win reads as a wasted week in six months, and it almost never was.', 'Inbox / Reports → Timeline'],
+        ['Name the one thing that did not happen, and why', 'Not to punish yourself. Once you have written the reason four weeks running, you are looking at a system problem, not a willpower problem.', 'Inbox'],
+        ['Pick one highlight to tell the team and one to tell home', 'Different audiences, different wins. The team one is momentum; the home one is why any of it is worth doing.', '—']
       ]},
       { name: 'Finance', steps: [
         ['Reconcile every account against the bank', 'The ledger has to agree with reality, or nothing downstream is true.', 'Finance app'],
@@ -403,7 +444,7 @@ const REVIEW_LISTS = {
   },
   monthly: {
     label: 'Monthly close',
-    blurb: 'An hour, first weekend of the month. The one that catches drift.',
+    blurb: 'An hour, first weekend of the month. The one that catches drift and records what actually went right.',
     resets: 'resets on the 1st',
     sections: [
       { name: 'Finance', steps: [
@@ -418,13 +459,37 @@ const REVIEW_LISTS = {
         ['Compare this month’s portfolio number to last', 'Weighted completion month over month is the only real progress signal.', 'Reports → Projects'],
         ['Re-read each area’s purpose and guiding principle', 'The Binder is the layer that stops the task list becoming the whole point.', 'Life Binder'],
         ['Prune what will never happen', 'Delete or archive it. A backlog you do not believe is noise in every roll-up.', 'Projects']
+      ]},
+      { name: 'IntelMotion', steps: [
+        ['Read the month in the app: service against installation', 'Which side actually carried the month. Service is the recurring base and installation is the lumpy part — knowing the mix is knowing the business.', 'IntelMotion app'],
+        ['Check contract renewals coming in 90 days', 'A maintenance contract is won or lost three months before it expires, not in the renewal meeting.', 'IntelMotion app'],
+        ['Read the repeat-fault list by client', 'The clients costing you the most callouts. Either the equipment needs a decision or the contract does.', 'IntelMotion app'],
+        ['Check Zipana and IntelTech against their milestones', 'Monthly is the right cadence for a venture that is still being built. Weekly is noise; quarterly is too late to correct.', 'Reports → Projects']
+      ]},
+      { name: 'Wins & Highlights', steps: [
+        ['Write the month’s three biggest wins', 'Across everything — IntelMotion, Nigist, Tamar, home. Read the completed-work timeline first so you are recalling, not guessing.', 'Reports → Timeline'],
+        ['Name the month’s biggest miss and what it cost', 'In money, time or trust. A miss you can price is a miss you will actually fix.', 'Inbox'],
+        ['Record one family highlight', 'Something with the kids or with your wife, written down. In a month this full it is the first thing to vanish and the last thing you would want to have lost.', 'Inbox'],
+        ['Read last month’s wins before you plan this one', 'Momentum is only visible over months. This is the step that stops a good year feeling like a treadmill.', 'Review → Monthly']
       ]}
     ]
   }
 };
+/* A tick is stored against the step's text, not its position. Positional keys
+   (s0i0) silently re-point every tick the moment a step is inserted above them —
+   yesterday's Finance tick reappearing on a new IntelMotion step. Hashing the
+   section plus the step means the list can be edited and reordered forever and a
+   tick always belongs to the step it was made on. */
+function reviewKey(secName, stepTitle){
+  const str = secName + '\u0000' + stepTitle;
+  let h = 5381;
+  for(let i=0;i<str.length;i++) h = ((h*33) ^ str.charCodeAt(i)) >>> 0;
+  return 'k' + h.toString(36);
+}
 function reviewSteps(kind){
   const out = [];
-  (REVIEW_LISTS[kind].sections||[]).forEach((sec,si)=>sec.steps.forEach((st,i)=>out.push({sec:sec.name, si, i, key:`s${si}i${i}`, st})));
+  (REVIEW_LISTS[kind].sections||[]).forEach((sec,si)=>sec.steps.forEach((st,i)=>
+    out.push({ sec:sec.name, si, i, key:reviewKey(sec.name, st[0]), st })));
   return out;
 }
 
@@ -743,29 +808,64 @@ function numLabel(i){ return numbersOn() ? `<span class="list-num">${i+1}.</span
 
 /* Up/down controls. Buttons rather than drag: they work identically on a
    phone and a desktop, and never fight the list's own scrolling. */
-function moveTools(action, id, i, len, extra){
+/* A row's reorder controls: a drag handle plus the two arrows. The arrows stay
+   because a drag needs a pointer — the handle is the fast way, the arrows are
+   the reachable way (keyboard, and a cramped phone screen). `owner` scopes the
+   list when several of the same kind are on screen at once, e.g. the milestone
+   lists of two expanded projects. */
+function moveTools(action, id, i, len, extra, owner){
+  const own = owner!=null ? ` data-owner="${esc(owner)}"` : '';
   return `<span class="row-tools">
-    <button class="icon-btn btn-sm" data-action="${action}" data-dir="-1" data-i="${i}" ${extra||''} title="Move up" ${i===0?'disabled':''}>↑</button>
-    <button class="icon-btn btn-sm" data-action="${action}" data-dir="1" data-i="${i}" ${extra||''} title="Move down" ${i>=len-1?'disabled':''}>↓</button>
+    <button class="drag-handle" data-dnd-handle data-dnd-action="${action}" data-dnd-i="${i}"${own} title="Drag to reorder" aria-label="Drag to reorder">⠿</button>
+    <button class="icon-btn btn-sm" data-action="${action}" data-dir="-1" data-i="${i}"${own} ${extra||''} title="Move up" ${i===0?'disabled':''}>↑</button>
+    <button class="icon-btn btn-sm" data-action="${action}" data-dir="1" data-i="${i}"${own} ${extra||''} title="Move down" ${i>=len-1?'disabled':''}>↓</button>
   </span>`;
 }
-/* Move within an array, clamped. Returns true when something actually moved. */
-function moveInArray(arr, from, dir){
-  const to = from + dir;
-  if(from<0 || from>=arr.length || to<0 || to>=arr.length) return false;
+
+/* Move an element to an absolute index: remove, then insert. A swap would do for
+   neighbours but not for a drag that crosses several rows. */
+function moveInArrayTo(arr, from, to){
+  if(from===to || from<0 || from>=arr.length || to<0 || to>=arr.length) return false;
   const [x] = arr.splice(from,1);
   arr.splice(to,0,x);
   return true;
 }
-/* Reorder the shared items array so `view` (a filtered slice) takes a new order. */
-function reorderItemsBy(view, from, dir){
-  const to = from + dir;
-  if(to<0 || to>=view.length) return false;
+function moveInArray(arr, from, dir){ return moveInArrayTo(arr, from, from+dir); }
+
+/* Reorder a filtered slice inside the shared items array. The positions the slice
+   occupies stay exactly where they are; only which member sits in each is rewritten,
+   so items filtered out of view never shift. */
+function reorderItemsTo(view, from, to){
+  if(from===to || from<0 || from>=view.length || to<0 || to>=view.length) return false;
+  const next = view.slice();
+  const [x] = next.splice(from,1);
+  next.splice(to,0,x);
   const all = items();
-  const a = all.indexOf(view[from]), b = all.indexOf(view[to]);
-  if(a<0 || b<0) return false;
-  all[a] = view[to]; all[b] = view[from];
+  const slots = view.map(v=>all.indexOf(v));
+  if(slots.some(n=>n<0)) return false;
+  slots.sort((a,b)=>a-b).forEach((slot,i)=>{ all[slot] = next[i]; });
   return true;
+}
+function reorderItemsBy(view, from, dir){ return reorderItemsTo(view, from, from+dir); }
+
+/* The one place that knows what each reorder action actually reorders. The ↑↓
+   buttons and the drag handle both come through here, so a drag can never move
+   a different list from the one the arrows move. `owner` is the project id for
+   the two per-project lists. */
+const REORDER_LISTS = {
+  'move-now':     { list: () => nowPins(),                     apply: (f,t) => moveInArrayTo(nowPins(), f, t) },
+  'move-inbox':   { list: () => inboxViewList(),               apply: (f,t) => reorderItemsTo(inboxViewList(), f, t) },
+  'move-project': { list: () => projectViewList(),             apply: (f,t) => reorderItemsTo(projectViewList(), f, t) },
+  'move-subtask': { list: o => ((byId(o)||{}).subtasks) || [], apply: (f,t,o) => { const p = byId(o); return !!p && moveInArrayTo(p.subtasks, f, t); } },
+  'move-child':   { list: o => tasksOf(o),                     apply: (f,t,o) => reorderItemsTo(tasksOf(o), f, t) },
+  'move-habit':   { list: () => state.state.habits,            apply: (f,t) => moveInArrayTo(state.state.habits, f, t) }
+};
+function applyReorder(action, from, to, owner){
+  const spec = REORDER_LISTS[action];
+  if(!spec || isNaN(from) || isNaN(to)) return false;
+  const len = spec.list(owner).length;
+  if(from<0 || from>=len || to<0 || to>=len) return false;
+  return spec.apply(from, to, owner);
 }
 /* Escape a value for use inside a [attr="..."] selector. */
 function cssEscape(v){ return String(v==null?'':v).replace(/["\\]/g, '\\$&'); }
@@ -1048,15 +1148,6 @@ function upNextCandidates(){
     });
 }
 
-function fillNowSlots(){
-  const pins = nowPins();
-  const pool = upNextCandidates();
-  while(pins.length<3 && pool.length){
-    const next = pool.shift();
-    pins.push(next.id);
-  }
-}
-
 /* =========================================================
    Mutations
    ========================================================= */
@@ -1079,10 +1170,11 @@ function completeItem(item, viaCheckbox){
     const isMilestoneTask = item.type==='task' && item.projectId;
     grantXP(isMilestoneTask?XP_MILESTONE:XP_TASK, isMilestoneTask?'Milestone done':'Task done');
     item.xpAwarded = true;
-    // remove from Now pins + auto-promote next pipeline item
+    // Finishing a pinned item clears its slot. Nothing is promoted into it:
+    // what sits in Now is the owner's choice, never the app's.
     const pins = nowPins();
     const idx = pins.indexOf(item.id);
-    if(idx>=0){ pins.splice(idx,1); fillNowSlots(); }
+    if(idx>=0) pins.splice(idx,1);
   }
 }
 
@@ -1115,13 +1207,17 @@ function deleteLifeArea(name){
   state.state.habits.forEach(h=>{ if(h.category===name) h.category=null; });
 }
 
+/* Pin and unpin are the only things that change what is in Now. There is no cap:
+   three is the advice, not a rule the app enforces against its owner. */
 function togglePin(item){
   const pins = nowPins();
   const idx = pins.indexOf(item.id);
-  if(idx>=0){ pins.splice(idx,1); }
-  else{
-    if(pins.length>=3){ pushToast('Now is full (3/3) — unpin something first'); return; }
+  if(idx>=0){
+    pins.splice(idx,1);
+    pushToast(`Removed "${item.title}" from Now`);
+  } else {
     pins.push(item.id);
+    pushToast(`Pinned "${item.title}" to Now`);
   }
 }
 
@@ -1321,22 +1417,28 @@ function scheduleMidnightRollover(){
 }
 
 function renderNowView(){
-  fillNowSlots();
+  // Whatever was pinned, in the order it was put there. Nothing is added here
+  // by the app, so a deleted item is the only reason a pin disappears.
   const pins = nowPins().map(byId).filter(Boolean);
   const pipeline = upNextCandidates().slice(0,6);
+  const sub = !pins.length
+    ? 'Nothing pinned. Pin what today is actually about — from the pipeline below, the Inbox, or any project.'
+    : pins.length<=3
+      ? `${pins.length} focus item${pins.length===1?'':'s'} — nothing else matters right now.`
+      : `${pins.length} focus items. Three is what usually survives a real day, but this is your call.`;
   return `<div class="view">
     <div class="view-head">
-      <div><div class="view-title">Now</div><div class="view-sub">Your top ${pins.length} focus item${pins.length===1?'':'s'} — nothing else matters right now.</div></div>
+      <div><div class="view-title">Now</div><div class="view-sub">${sub}</div></div>
       ${renderTodayStamp()}
     </div>
     <div class="focus-grid">
-      ${pins.map((it,i)=>renderFocusCard(it,i+1)).join('') || ''}
-      ${Array.from({length:Math.max(0,3-pins.length)}).map(()=>`<div class="focus-empty-slot">＋ Pin a task from Inbox or Projects to fill this slot</div>`).join('')}
+      ${pins.map((it,i)=>renderFocusCard(it,i,pins.length)).join('')}
+      ${pins.length<3? `<div class="focus-empty-slot">＋ Pin a task from the pipeline, Inbox or Projects</div>` : ''}
     </div>
     <div class="pipeline">
       <div class="pipeline-head">
         <div class="pipeline-title">⏭ Up next pipeline</div>
-        <span class="view-sub" style="margin:0">Starred / high-priority, auto-fills open slots</span>
+        <span class="view-sub" style="margin:0">Starred / high-priority — suggestions only, nothing moves into Now unless you put it there</span>
       </div>
       ${pipeline.length? pipeline.map((it,i)=>renderPipelineRow(it,i)).join('') : `<div class="empty" style="padding:20px">Nothing queued — star a task to add it here.</div>`}
     </div>
@@ -1344,16 +1446,17 @@ function renderNowView(){
   </div>`;
 }
 
-function renderFocusCard(it, num){
-  return `<div class="focus-card">
+function renderFocusCard(it, i, len){
+  return `<div class="focus-card" data-dnd-row>
     <button class="check ${it.status==='done'?'done':''}" data-action="complete" data-id="${it.id}">${checkSvg()}</button>
-    <div class="focus-num" style="margin-left:-2px">${num}</div>
+    <div class="focus-num" style="margin-left:-2px">${i+1}</div>
     <div class="item-main">
       <div class="focus-title clickable-title ${it.status==='done'?'item-title done':''}" data-action="open-item" data-id="${it.id}" title="Where does this come from?">${esc(it.title)}</div>
       ${renderMeta(it)}
     </div>
     <div class="item-actions">
-      <button class="icon-btn btn-sm" data-action="toggle-pin" data-id="${it.id}" title="Remove from Now">✕</button>
+      ${moveTools('move-now', it.id, i, len)}
+      <button class="icon-btn btn-sm btn-danger" data-action="toggle-pin" data-id="${it.id}" title="Remove from Now — nothing will replace it">✕</button>
     </div>
   </div>`;
 }
@@ -1409,7 +1512,7 @@ function renderHabitStrip(compact, weekOffset){
       <button class="btn btn-sm" data-action="add-habit">+ Add habit</button>
     </div>
     ${habits.map(h=>`
-      <div class="habit-row ${h.active===false?'inactive':''}">
+      <div class="habit-row ${h.active===false?'inactive':''}" ${compact?'':'data-dnd-row'}>
         <div class="habit-name" title="${esc(h.name)}">${h.emoji} ${esc(h.name)}${h.active===false?' <span class="chip" style="padding:1px 6px">retired</span>':''}${h.frequency&&h.frequency.type==='weekly'?` <span style="color:var(--c-text-muted);font-weight:500">(${h.frequency.target}x/wk)</span>`:''}</div>
         <div class="habit-days">
           ${week.map((d,i)=>{
@@ -1442,17 +1545,25 @@ function inboxScoped(){
   return t;
 }
 
-function renderInboxView(){
-  const unfiled = inboxItems();
-  const all = inboxScoped();
-  const projList = projects();
-  const assignees = Array.from(new Set(allOpenTasks().filter(i=>i.assignee).map(i=>i.assignee))).sort();
-  let list = ui.inboxAssigneeFilter==='all' ? all : all.filter(i=>i.assignee===ui.inboxAssigneeFilter);
+/* Exactly the rows the Inbox is showing, scope + filters + search applied.
+   Rendering and reordering both call this, so row 3 on screen is row 3 here. */
+function inboxViewList(){
+  let list = inboxScoped();
+  if(ui.inboxAssigneeFilter!=='all') list = list.filter(i=>i.assignee===ui.inboxAssigneeFilter);
   if(ui.inboxProject!=='all') list = list.filter(i=>i.projectId===ui.inboxProject);
   if(ui.inboxSearch) list = list.filter(i=>matchesSearch(i.title, ui.inboxSearch)
     || matchesSearch(i.assignee, ui.inboxSearch)
     || matchesSearch(i.category, ui.inboxSearch)
     || (i.projectId && matchesSearch((byId(i.projectId)||{}).title, ui.inboxSearch)));
+  return list;
+}
+
+function renderInboxView(){
+  const unfiled = inboxItems();
+  const all = inboxScoped();
+  const projList = projects();
+  const assignees = Array.from(new Set(allOpenTasks().filter(i=>i.assignee).map(i=>i.assignee))).sort();
+  const list = inboxViewList();
   return `<div class="view">
     <div class="view-head">
       <div><div class="view-title">Inbox</div><div class="view-sub">Every open task, wherever it lives. Capture here, then process the unfiled ones.</div></div>
@@ -1492,7 +1603,7 @@ function renderInboxView(){
 let inboxViewLen = 0;
 function renderInboxRow(it, i){
   const pinned = nowPins().indexOf(it.id)>=0;
-  return `<div class="item-row">
+  return `<div class="item-row" data-dnd-row>
     ${numLabel(i)}
     <button class="check ${it.status==='done'?'done':''}" data-action="complete" data-id="${it.id}">${checkSvg()}</button>
     <div class="item-main">
@@ -1545,8 +1656,8 @@ function renderProcessInbox(){
 }
 
 /* ---------- PROJECTS ---------- */
-function renderProjectsView(){
-  const areas = state.state.lifeAreas;
+/* Exactly the cards the Projects tab is showing. Rendering and reordering share it. */
+function projectViewList(){
   let list = projects();
   if(!ui.showArchived) list = list.filter(p=>inactiveProjects.indexOf(p.id)===-1);
   if(ui.projectFilter!=='all') list = list.filter(p=>p.category===ui.projectFilter);
@@ -1554,6 +1665,12 @@ function renderProjectsView(){
     || matchesSearch(p.category, ui.projectSearch)
     || matchesSearch(p.assignee, ui.projectSearch)
     || (p.subtasks||[]).some(st=>matchesSearch(st.title, ui.projectSearch)));
+  return list;
+}
+
+function renderProjectsView(){
+  const areas = state.state.lifeAreas;
+  const list = projectViewList();
   return `<div class="view">
     <div class="view-head">
       <div><div class="view-title">Projects</div><div class="view-sub">Grouped by Life Binder domain — everything with more than one step lives here.</div></div>
@@ -1597,7 +1714,7 @@ function renderProjectCard(p, i){
   const st = projectStats(p);
   const expanded = ui.expandedProjects.has(p.id);
   const archived = inactiveProjects.indexOf(p.id)>=0;
-  return `<div class="project-card" style="${archived?'opacity:.55':''}">
+  return `<div class="project-card" data-dnd-row style="${archived?'opacity:.55':''}">
     <div class="project-head" data-action="toggle-expand" data-id="${p.id}">
       ${numLabel(i)}
       <button class="check ${p.status==='done'?'done':''}" data-action="complete" data-id="${p.id}">${checkSvg()}</button>
@@ -1632,12 +1749,12 @@ function renderProjectBody(p, children){
     <div class="section-label">Milestones <span style="text-transform:none;letter-spacing:0;font-weight:500">— tap S/M/L/XL to size a step</span></div>
     <div class="sub-list">
       ${p.subtasks.map((s,si)=>`
-        <div class="sub-row">
+        <div class="sub-row" data-dnd-row>
           ${numLabel(si)}
           <button class="check ${s.done?'done':''}" style="width:17px;height:17px" data-action="toggle-subtask" data-id="${p.id}" data-sub="${s.id}">${checkSvg()}</button>
           ${effortChip(s.effort, `data-id="${p.id}" data-sub="${s.id}"`)}
           <span style="flex:1;min-width:0;${s.done?'text-decoration:line-through;color:var(--c-text-muted)':''}">${esc(s.title)}</span>
-          ${moveTools('move-subtask', p.id, si, p.subtasks.length, `data-id="${p.id}"`)}
+          ${moveTools('move-subtask', p.id, si, p.subtasks.length, `data-id="${p.id}"`, p.id)}
           <button class="icon-btn btn-sm" data-action="rename-subtask" data-id="${p.id}" data-sub="${s.id}" title="Rename milestone">✎</button>
           <button class="icon-btn btn-sm btn-danger" data-action="delete-subtask" data-id="${p.id}" data-sub="${s.id}" title="Delete milestone">✕</button>
         </div>`).join('') || `<div class="view-sub">No milestones yet.</div>`}
@@ -1648,7 +1765,7 @@ function renderProjectBody(p, children){
     </div>
     <div class="section-label">Tasks</div>
     ${children.map((c,ci)=>`
-      <div class="item-row" style="background:var(--c-surface)">
+      <div class="item-row" data-dnd-row style="background:var(--c-surface)">
         ${numLabel(ci)}
         <button class="check ${c.status==='done'?'done':''}" data-action="complete" data-id="${c.id}">${checkSvg()}</button>
         ${effortChip(c.effort, `data-id="${c.id}"`)}
@@ -1657,7 +1774,7 @@ function renderProjectBody(p, children){
           ${renderMeta(c)}
         </div>
         <div class="item-actions">
-          ${moveTools('move-child', p.id, ci, children.length, `data-id="${p.id}"`)}
+          ${moveTools('move-child', p.id, ci, children.length, `data-id="${p.id}"`, p.id)}
           <button class="icon-btn btn-sm" data-action="open-editor" data-id="${c.id}" title="Edit task">✎</button>
           <button class="icon-btn btn-sm" data-action="toggle-star" data-id="${c.id}" title="Star">${c.isStarred?'⭐':'☆'}</button>
           <button class="icon-btn btn-sm" data-action="toggle-pin" data-id="${c.id}" title="Pin to Now">📌</button>
@@ -3015,6 +3132,87 @@ function wireGlobal(){
   };
 }
 
+/* ---------- drag to reorder ----------
+   Pointer events, not HTML5 drag-and-drop: HTML5 drag never fires on a touch
+   screen, and this app gets used on a phone. A drag can only start from the ⠿
+   handle, so clicking a row still opens it and dragging the page still scrolls.
+
+   The handle carries which list it belongs to (data-dnd-action) and its own
+   index (data-dnd-i); sibling rows are found by matching both the action and the
+   owner, which keeps two expanded projects' milestone lists apart. */
+let drag = null;
+const DRAG_SLOP = 6;   // px of movement before a press counts as a drag, not a tap
+
+function dragSiblings(action, owner){
+  const sel = `[data-dnd-handle][data-dnd-action="${cssEscape(action)}"]`
+            + (owner!=null ? `[data-owner="${cssEscape(owner)}"]` : ':not([data-owner])');
+  return Array.from(document.querySelectorAll(sel))
+    .map(h=>({ handle:h, row:h.closest('[data-dnd-row]'), i:+h.getAttribute('data-dnd-i') }))
+    .filter(r=>r.row)
+    .sort((a,b)=>a.i-b.i);
+}
+
+/* Which gap the pointer is sitting in: 0..n, where n means "past the last row". */
+function dragSlotAt(rows, y){
+  for(let k=0;k<rows.length;k++){
+    const r = rows[k].row.getBoundingClientRect();
+    if(y < r.top + r.height/2) return k;
+  }
+  return rows.length;
+}
+
+function dragPaint(slot){
+  drag.rows.forEach(r=>r.row.classList.remove('drop-before','drop-after'));
+  if(slot==null) return;
+  if(slot < drag.rows.length) drag.rows[slot].row.classList.add('drop-before');
+  else if(drag.rows.length) drag.rows[drag.rows.length-1].row.classList.add('drop-after');
+}
+
+function dragClear(){
+  if(!drag) return;
+  drag.rows.forEach(r=>r.row.classList.remove('drop-before','drop-after','dragging'));
+  document.body.classList.remove('dragging-active');
+  try{ drag.handle.releasePointerCapture(drag.pointerId); }catch(e){}
+  drag = null;
+}
+
+document.addEventListener('pointerdown', (e)=>{
+  const handle = e.target.closest('[data-dnd-handle]');
+  if(!handle || e.button>0) return;
+  const action = handle.getAttribute('data-dnd-action');
+  const owner = handle.getAttribute('data-owner');
+  const rows = dragSiblings(action, owner);
+  const from = rows.findIndex(r=>r.handle===handle);
+  if(from<0 || rows.length<2) return;
+  drag = { handle, action, owner, rows, from, startY:e.clientY, active:false, slot:null, pointerId:e.pointerId };
+  try{ handle.setPointerCapture(e.pointerId); }catch(err){}
+  e.preventDefault();
+});
+
+document.addEventListener('pointermove', (e)=>{
+  if(!drag) return;
+  if(!drag.active){
+    if(Math.abs(e.clientY-drag.startY) < DRAG_SLOP) return;
+    drag.active = true;
+    drag.rows[drag.from].row.classList.add('dragging');
+    document.body.classList.add('dragging-active');
+  }
+  drag.slot = dragSlotAt(drag.rows, e.clientY);
+  dragPaint(drag.slot);
+  e.preventDefault();
+});
+
+document.addEventListener('pointerup', (e)=>{
+  if(!drag) return;
+  const { action, owner, from, slot, active } = drag;
+  dragClear();
+  if(!active || slot==null) return;
+  // A slot is a gap; removing the dragged row first shifts every later gap down one.
+  const to = from < slot ? slot-1 : slot;
+  if(applyReorder(action, from, to, owner)) persist();
+});
+document.addEventListener('pointercancel', dragClear);
+
 document.addEventListener('click', (e)=>{
   const t = e.target.closest('[data-action]');
   if(!t) return;
@@ -3188,26 +3386,6 @@ function handleAction(action, el){
       persist();
       break;
     }
-    case 'move-project': {
-      let view = projects();
-      if(!ui.showArchived) view = view.filter(p=>inactiveProjects.indexOf(p.id)===-1);
-      if(ui.projectFilter!=='all') view = view.filter(p=>p.category===ui.projectFilter);
-      if(ui.projectSearch) view = view.filter(p=>matchesSearch(p.title, ui.projectSearch)
-        || matchesSearch(p.category, ui.projectSearch) || matchesSearch(p.assignee, ui.projectSearch)
-        || (p.subtasks||[]).some(st=>matchesSearch(st.title, ui.projectSearch)));
-      if(reorderItemsBy(view, +el.getAttribute('data-i'), +el.getAttribute('data-dir'))) persist();
-      break;
-    }
-    case 'move-inbox': {
-      let view = inboxScoped();
-      if(ui.inboxAssigneeFilter!=='all') view = view.filter(i=>i.assignee===ui.inboxAssigneeFilter);
-      if(ui.inboxProject!=='all') view = view.filter(i=>i.projectId===ui.inboxProject);
-      if(ui.inboxSearch) view = view.filter(i=>matchesSearch(i.title, ui.inboxSearch)
-        || matchesSearch(i.assignee, ui.inboxSearch) || matchesSearch(i.category, ui.inboxSearch)
-        || (i.projectId && matchesSearch((byId(i.projectId)||{}).title, ui.inboxSearch)));
-      if(reorderItemsBy(view, +el.getAttribute('data-i'), +el.getAttribute('data-dir'))) persist();
-      break;
-    }
     case 'project-search-changed': ui.projectSearch = el.value; render(); break;
     case 'reports-search-changed': ui.reportsSearch = el.value; render(); break;
     case 'clear-reports-search': ui.reportsSearch=''; render(); break;
@@ -3216,14 +3394,10 @@ function handleAction(action, el){
     case 'clear-inbox-search': ui.inboxSearch=''; render(); break;
     case 'inbox-scope': ui.inboxScope = el.getAttribute('data-scope'); render(); break;
     case 'inbox-project': ui.inboxProject = el.value; render(); break;
-    case 'move-subtask': {
-      const proj = byId(id);
-      if(proj && moveInArray(proj.subtasks, +el.getAttribute('data-i'), +el.getAttribute('data-dir'))) persist();
-      break;
-    }
-    case 'move-child': {
-      const kids = tasksOf(id);
-      if(reorderItemsBy(kids, +el.getAttribute('data-i'), +el.getAttribute('data-dir'))) persist();
+    case 'move-now': case 'move-inbox': case 'move-project':
+    case 'move-subtask': case 'move-child': case 'move-habit': {
+      const from = +el.getAttribute('data-i');
+      if(applyReorder(action, from, from + (+el.getAttribute('data-dir')), el.getAttribute('data-owner'))) persist();
       break;
     }
     case 'cycle-effort': {
@@ -3391,10 +3565,6 @@ function handleAction(action, el){
     case 'toggle-habit-active': {
       const h = state.state.habits.find(x=>x.id===id);
       if(h){ h.active = h.active===false; pushToast(h.active? `"${h.name}" is active again` : `"${h.name}" retired — its history is kept`); persist(); }
-      break;
-    }
-    case 'move-habit': {
-      if(moveInArray(state.state.habits, +el.getAttribute('data-i'), +el.getAttribute('data-dir'))) persist();
       break;
     }
     case 'delete-habit': {
