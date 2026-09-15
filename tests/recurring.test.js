@@ -146,5 +146,16 @@ eq('a current name is left alone', remap('Family & Marriage'), 'Family & Marriag
 eq('a current name is left alone (work)', remap('Work — IntelMotion / Intel Group'), 'Work — IntelMotion / Intel Group');
 eq('an unknown domain is left alone, not binned', remap('Nigist LLC'), 'Nigist LLC');
 
+/* ---- the Inbox badge must count only what the Inbox can show ----
+   It used to count any item in the Inbox domain, projects included, so 16
+   unfiled projects read as "16" against a list that shows only tasks. */
+resetApp();
+newItem({ type:'project', title:'A project left unfiled', category:'Inbox' });
+newItem({ type:'task', title:'A real unfiled task', category:'Inbox' });
+newItem({ type:'task', title:'A filed task', category:'Home' });
+eq('the badge counts unfiled tasks only, not projects', inboxItems().length, 1);
+eq('  and it equals what the Inbox lists', inboxItems().length,
+  items().filter(i => i.type === 'task' && i.status === 'open' && i.category === 'Inbox').length);
+
 console.log(`recurring: ${passes} passed, ${fails} failed`);
 process.exit(fails ? 1 : 0);

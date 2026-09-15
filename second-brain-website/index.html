@@ -859,7 +859,11 @@ const ui = {
    ========================================================= */
 function items(){ return state.state.items; }
 function byId(id){ return items().find(i=>i.id===id); }
-function inboxItems(){ return items().filter(i=>i.category==='Inbox' && i.status==='open'); }
+/* What the Inbox badge and Process Inbox count. It must match what the Inbox
+   actually lists — tasks — or a project left in the Inbox domain shows up as a
+   number against an empty list with no way to reach it. Such a project is still
+   visible and fixable, under the Inbox domain in the Projects tab. */
+function inboxItems(){ return items().filter(i=>i.type==='task' && i.category==='Inbox' && i.status==='open'); }
 function openTasks(){ return items().filter(i=>i.type==='task' && i.status==='open'); }
 function projects(){ return items().filter(i=>i.type==='project'); }
 function tasksOf(projectId){ return items().filter(i=>i.projectId===projectId); }
@@ -1734,7 +1738,7 @@ function renderMeta(it){
   const series = it.seriesId ? seriesById(it.seriesId) : null;
   if(parent) bits.push(`<span class="parent-chip">📁 ${esc(parent.title)}</span>`);
   else if(series) bits.push(`<button class="parent-chip" data-action="open-series" data-series="${series.id}" title="${esc(recurrenceLabel(series))} — click to edit the cadence">${series.isChore?'🧹':'🔁'} ${esc(recurrenceLabel(series))}</button>`);
-  else if(it.type==='task') bits.push(`<span class="parent-chip">${it.category==='Inbox'?'standalone · unfiled':'standalone'}</span>`);
+  else if(it.type==='task') bits.push(`<span class="parent-chip"${it.category==='Inbox'?' style="color:var(--c-warn);font-weight:700" title="Give it a domain with Process Inbox"':''}>${it.category==='Inbox'?'needs a domain':'standalone'}</span>`);
   if(it.assignee) bits.push(`<span class="chip">👤 ${esc(it.assignee)}</span>`);
   if(it.dueDate) bits.push(`<span style="${isOverdue(it)?'color:var(--c-danger);font-weight:700':''}">${fmtDue(it.dueDate)}</span>`);
   if(it.isStarred) bits.push('⭐');
@@ -1803,9 +1807,9 @@ function allOpenTasks(){ return items().filter(i=>i.type==='task' && i.status===
    Standalone scope, which is the one thing a filter must never do. */
 function inboxScoped(){
   const t = allOpenTasks();
-  if(ui.inboxScope==='unfiled')     return t.filter(i=>i.category==='Inbox');
+  // 'unfiled' is kept as an alias so an old saved view still resolves.
   if(ui.inboxScope==='project')     return t.filter(i=>i.projectId);
-  if(ui.inboxScope==='standalone')  return t.filter(i=>!i.projectId);
+  if(ui.inboxScope==='standalone' || ui.inboxScope==='unfiled') return t.filter(i=>!i.projectId);
   if(ui.inboxScope==='recurring')   return t.filter(i=>i.seriesId);
   return t;
 }
@@ -1820,7 +1824,10 @@ function inboxViewList(){
     || matchesSearch(i.assignee, ui.inboxSearch)
     || matchesSearch(i.category, ui.inboxSearch)
     || (i.projectId && matchesSearch((byId(i.projectId)||{}).title, ui.inboxSearch)));
-  return list;
+  // Anything without a domain sorts first — that is the work the Inbox is for.
+  // A stable partition, so manual ordering inside each half is preserved.
+  const needsDomain = list.filter(i=>i.category==='Inbox');
+  return needsDomain.length ? needsDomain.concat(list.filter(i=>i.category!=='Inbox')) : list;
 }
 
 function renderInboxView(){
@@ -1840,9 +1847,8 @@ function renderInboxView(){
     </div>
     <div class="chip-row">
       ${[['all','All open tasks',allOpenTasks().length,'Every open task, wherever it lives'],
-         ['unfiled','Unfiled',unfiled.length,'No domain yet — these are what Process Inbox works through. A subset of Standalone.'],
          ['project','In a project',allOpenTasks().filter(i=>i.projectId).length,'A step inside a project'],
-         ['standalone','Standalone',allOpenTasks().filter(i=>!i.projectId).length,'Not part of any project — filed or not. Includes everything under Unfiled.'],
+         ['standalone','Standalone',allOpenTasks().filter(i=>!i.projectId).length,'Not part of any project. Anything still needing a domain sorts to the top and is marked “needs a domain”.'],
          ['recurring','Recurring',allOpenTasks().filter(i=>i.seriesId).length,'Created by a recurring cadence']
         ].map(([k,label,n,tip])=>`<button class="chip ${ui.inboxScope===k?'on':''}" data-action="inbox-scope" data-scope="${k}" title="${esc(tip)}">${label} (${n})</button>`).join('')}
     </div>
