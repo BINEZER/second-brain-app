@@ -116,5 +116,35 @@ eq('label: every other month', label({ type: 'monthly', interval: 2, dayOfMonth:
 eq('label: daily', label({ type: 'daily', interval: 1 }), 'Every day');
 eq('label: weekly', label({ type: 'weekly', interval: 1, days: [0, 2] }), 'Every week on Mon, Wed');
 
+
+/* ---- what a Reset must leave behind ----
+   resetApp() assigns defaultRoot() straight to `state`, without going through
+   loadRoot()'s migration. Anything the migration creates but defaultRoot() omits
+   is therefore undefined after a reset, and the view that reads it throws. */
+const fresh = __in('defaultRoot()');
+ok('a fresh root carries reviewCustom for every cadence',
+  ['daily','weekly','monthly'].every(k => Array.isArray(fresh.state.reviewCustom[k])), fresh.state.reviewCustom);
+ok('a fresh root carries reviewHidden for every cadence',
+  ['daily','weekly','monthly'].every(k => Array.isArray(fresh.state.reviewHidden[k])), fresh.state.reviewHidden);
+ok('a fresh root carries recurring', Array.isArray(fresh.state.recurring));
+// The real symptom: the Review tab renders off these, so it must survive a reset.
+__setState(__in('defaultRoot()'));
+let reviewThrew = null;
+try { __in('reviewSections("daily")'); __in('reviewSteps("weekly")'); }
+catch (e) { reviewThrew = e.message; }
+ok('the review checklist renders on a freshly reset app', reviewThrew === null, reviewThrew);
+eq('  and still has its built-in daily sections', __in('reviewSections("daily")').length, 4);
+
+/* ---- the one-time area migration must not eat current categories ----
+   It maps six legacy names; everything else is already current. The old
+   `|| 'Inbox'` fallback swept every modern category into the Inbox. */
+const MAP = __in('AREA_MIGRATION_MAP');
+const remap = c => MAP[c] ? MAP[c] : c;
+eq('a legacy name is still renamed', remap('Family'), 'Family & Marriage');
+eq('a legacy name is still renamed (Home)', remap('Home'), 'Home & Living Space');
+eq('a current name is left alone', remap('Family & Marriage'), 'Family & Marriage');
+eq('a current name is left alone (work)', remap('Work — IntelMotion / Intel Group'), 'Work — IntelMotion / Intel Group');
+eq('an unknown domain is left alone, not binned', remap('Nigist LLC'), 'Nigist LLC');
+
 console.log(`recurring: ${passes} passed, ${fails} failed`);
 process.exit(fails ? 1 : 0);
