@@ -766,6 +766,16 @@ function resetApp(){
     try{ localStorage.removeItem(STATE_KEY); }catch(e){}
     try{ localStorage.removeItem(INACTIVE_KEY); }catch(e){}
     state = defaultRoot();
+    // Put the Life Binder back straight away. SB_LB.clear() above only drops the
+    // stored copy; areas() falls through to LB_SEED, which is the binder's baseline
+    // content. Without this the Binder tab sits empty until some later boot happens
+    // to run the area migration — which reads as "the reset deleted my binder".
+    try{
+      if(typeof window.SB_LB!=='undefined'){
+        const seed = window.SB_LB.areas();
+        if(Array.isArray(seed) && seed.length) state.state.lifeAreas = JSON.parse(JSON.stringify(seed));
+      }
+    }catch(e){}
     inactiveProjects = [];
     ui.view = 'now'; ui.processInbox = false;
     closeModal();
