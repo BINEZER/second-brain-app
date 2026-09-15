@@ -353,22 +353,29 @@ async function launch() {
   await page.click('[data-action="save-recurrence"]');
   await page.waitForTimeout(700);
   const vat = (await st()).items.filter(i => i.title === 'File VAT return');
-  // The owner chose stacking: four missed filings are four debts, not one.
-  ok('four months back-dated produces four separate tasks', vat.length === 4, vat.map(i => i.dueDate));
+  /* The owner chose stacking: missed filings are separate debts, not one.
+     Assert the properties, not a fixed count — a back-date of four months spans
+     four or five 15ths depending on whether today is past the 15th, so a
+     hardcoded number fails once a month. Exact counts are pinned against frozen
+     dates in tests/recurring.test.js. */
+  const todayISO = new Date().toISOString().slice(0, 10);
+  ok('every missed month produced its own task', vat.length >= 4, vat.map(i => i.dueDate));
   ok('each carries its own due date', new Set(vat.map(i => i.dueDate)).size === vat.length);
+  ok('every one falls on the 15th', vat.every(i => i.dueDate.endsWith('-15')), vat.map(i => i.dueDate));
+  ok('none is dated in the future', vat.every(i => i.dueDate <= todayISO));
   ok('the template\'s priority carries to every instance', vat.every(i => i.priority === 'high'));
 
   await page.click('[data-action="nav"][data-view="inbox"]');
   await page.click('[data-action="inbox-scope"][data-scope="recurring"]');
   await page.waitForTimeout(300);
-  ok('the Recurring scope lists them', await page.locator('.item-row').count() === 4,
-    await page.locator('.item-row').count());
+  ok('the Recurring scope lists them', await page.locator('.item-row').count() === vat.length,
+    { shown: await page.locator('.item-row').count(), created: vat.length });
   ok('a row names its cadence', /Monthly on the 15th/.test(await page.locator('.item-row').first().innerText()));
   // Closing one instance must not disturb the others.
   await page.locator('.item-row .check').first().click();
   await page.waitForTimeout(500);
   ok('completing one leaves the rest standing',
-    (await st()).items.filter(i => i.title === 'File VAT return' && i.status === 'open').length === 3);
+    (await st()).items.filter(i => i.title === 'File VAT return' && i.status === 'open').length === vat.length - 1);
 
   await page.click('[data-action="nav"][data-view="recurring"]');
   await page.waitForTimeout(300);
@@ -382,13 +389,13 @@ async function launch() {
   await page.locator('.item-row').first().locator('[data-action="delete-recurrence"]').click();
   await page.waitForTimeout(500);
   ok('deleting the cadence keeps its existing tasks',
-    (await st()).recurring.length === 0 && (await st()).items.filter(i => i.title === 'File VAT return').length === 4);
+    (await st()).recurring.length === 0 && (await st()).items.filter(i => i.title === 'File VAT return').length === vat.length);
 
   // Reloading must not re-create what already exists.
   await page.reload({ waitUntil: 'domcontentloaded' });
   await page.waitForTimeout(800);
   ok('a reload never duplicates instances',
-    (await st()).items.filter(i => i.title === 'File VAT return').length === 4);
+    (await st()).items.filter(i => i.title === 'File VAT return').length === vat.length);
 
   console.log('\nHABITS — a monthly cadence');
   await page.click('[data-action="nav"][data-view="habits"]');

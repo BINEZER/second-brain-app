@@ -612,6 +612,11 @@ function defaultRoot(){
       habits: [],
       recurring: [],
       reviews: { daily:{}, weekly:{}, monthly:{} },
+      // These must exist here too: resetApp() assigns defaultRoot() straight to
+      // `state` without going through loadRoot(), so anything only created by the
+      // migration is undefined after a reset and the Review tab throws on render.
+      reviewCustom: { daily:[], weekly:[], monthly:[] },
+      reviewHidden: { daily:[], weekly:[], monthly:[] },
       gamification: { xp:0, habitBonusDates:[] }
     }
   };
@@ -706,9 +711,12 @@ function migrateAreasIfNeeded(){
     if(Array.isArray(binderAreas) && binderAreas.length){
       state.state.lifeAreas = JSON.parse(JSON.stringify(binderAreas));
     }
+    // Only rename the six legacy categories this map knows about. Anything else is
+    // already a current domain name and must be left alone — the old `|| 'Inbox'`
+    // fallback swept every modern category into the Inbox the first time this ran.
     items().forEach(it=>{
-      if(it.category && it.category!=='Inbox'){
-        it.category = AREA_MIGRATION_MAP[it.category] || 'Inbox';
+      if(it.category && AREA_MIGRATION_MAP[it.category]){
+        it.category = AREA_MIGRATION_MAP[it.category];
       }
     });
     state.areasMigratedV2 = true;
