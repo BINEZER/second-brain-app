@@ -1371,17 +1371,74 @@ function effortChip(effortKey, dataAttrs){
   return `<button class="effort-chip" data-action="cycle-effort" ${dataAttrs} title="Effort: ${esc(e.title)} (weight ${e.weight}) — click to change">${e.label}</button>`;
 }
 
+/* ---------- what Now can hold ----------
+   A pin used to be an item id, and a milestone is not an item — it lives in
+   project.subtasks. So a plan made entirely of projects and milestones, which is
+   the normal shape here, left Now and the pipeline permanently empty with no way
+   to fill them. A pin is now a reference: a bare item id for a task, or
+   "ms:<projectId>:<subtaskId>" for a milestone. Old pins keep working unchanged. */
+const MS_PREFIX = 'ms:';
+function msRef(projectId, subId){ return MS_PREFIX + projectId + ':' + subId; }
+function isMsRef(ref){ return typeof ref==='string' && ref.indexOf(MS_PREFIX)===0; }
+
+/* Resolve a pin to something renderable, or null if it no longer exists. */
+function resolveFocus(ref){
+  if(isMsRef(ref)){
+    const rest = ref.slice(MS_PREFIX.length);
+    const cut = rest.indexOf(':');
+    if(cut < 0) return null;
+    const proj = byId(rest.slice(0, cut));
+    if(!proj || !Array.isArray(proj.subtasks)) return null;
+    const sub = proj.subtasks.find(x=>x.id === rest.slice(cut+1));
+    if(!sub) return null;
+    return { ref, kind:'milestone', project:proj, sub, title:sub.title, done:!!sub.done,
+             priority:proj.priority, effort:sub.effort, category:proj.category };
+  }
+  const it = byId(ref);
+  if(!it) return null;
+  return { ref, kind:'task', item:it, title:it.title, done:it.status==='done',
+           priority:it.priority, effort:it.effort, category:it.category };
+}
+function focusList(){ return nowPins().map(resolveFocus).filter(Boolean); }
+
+/* The next unfinished milestone of a project — what "work on this project" means
+   in practice, and what the pipeline offers for a starred project. */
+function nextMilestone(p){
+  const pinned = new Set(nowPins());
+  return (p.subtasks||[]).find(sx=>!sx.done && !pinned.has(msRef(p.id, sx.id))) || null;
+}
+
+/* Suggestions for Now: starred or high-priority tasks, plus the next milestone of
+   each starred or high-priority project. One milestone per project, so a single
+   nine-step project cannot crowd out everything else. Starring a project used to
+   do nothing at all here — every candidate had to be a task. */
 function upNextCandidates(){
   const pinned = new Set(nowPins());
-  return openTasks()
+  const out = [];
+
+  openTasks()
     .filter(i=>!pinned.has(i.id) && (i.isStarred || i.priority==='high'))
-    .sort((a,b)=>{
-      const pr = {high:0,medium:1,low:2};
-      if(pr[a.priority]!==pr[b.priority]) return pr[a.priority]-pr[b.priority];
-      if(a.dueDate && b.dueDate) return a.dueDate.localeCompare(b.dueDate);
-      if(a.dueDate) return -1; if(b.dueDate) return 1;
-      return a.createdAt.localeCompare(b.createdAt);
+    .forEach(i=>out.push({ ref:i.id, kind:'task', item:i, title:i.title, done:false,
+                           priority:i.priority, effort:i.effort, category:i.category,
+                           dueDate:i.dueDate, createdAt:i.createdAt }));
+
+  projects()
+    .filter(p=>p.status!=='done' && inactiveProjects.indexOf(p.id)===-1 && (p.isStarred || p.priority==='high'))
+    .forEach(p=>{
+      const sub = nextMilestone(p);
+      if(!sub) return;
+      out.push({ ref:msRef(p.id, sub.id), kind:'milestone', project:p, sub, title:sub.title, done:false,
+                 priority:p.priority, effort:sub.effort, category:p.category,
+                 dueDate:p.dueDate, createdAt:p.createdAt });
     });
+
+  const pr = { high:0, medium:1, low:2 };
+  return out.sort((a,b)=>{
+    if(pr[a.priority]!==pr[b.priority]) return pr[a.priority]-pr[b.priority];
+    if(a.dueDate && b.dueDate) return a.dueDate.localeCompare(b.dueDate);
+    if(a.dueDate) return -1; if(b.dueDate) return 1;
+    return String(a.createdAt||'').localeCompare(String(b.createdAt||''));
+  });
 }
 
 /* =========================================================
@@ -1420,6 +1477,8 @@ function deleteItem(id){
   state.state.items = items().filter(i=>!toRemove.has(i.id));
   const p = nowPins();
   toRemove.forEach(rid=>{ const pi=p.indexOf(rid); if(pi>=0) p.splice(pi,1); });
+  // A deleted project takes its milestones' pins with it, or Now holds dead refs.
+  state.state.settings.nowPins = p.filter(ref=>!isMsRef(ref) || !toRemove.has(ref.slice(MS_PREFIX.length).split(':')[0]));
 }
 
 function convertToProject(item, category){
@@ -1446,21 +1505,32 @@ function deleteLifeArea(name){
 
 /* Pin and unpin are the only things that change what is in Now. There is no cap:
    three is the advice, not a rule the app enforces against its owner. */
-function togglePin(item){
+/* Takes a focus reference — an item id, or "ms:<project>:<subtask>" for a
+   milestone. Pin and unpin remain the only things that change what is in Now. */
+function togglePin(ref){
   const pins = nowPins();
-  const idx = pins.indexOf(item.id);
+  const idx = pins.indexOf(ref);
   if(idx>=0){
+    const f = resolveFocus(ref);
     pins.splice(idx,1);
-    pushToast(`Removed "${item.title}" from Now`);
-  } else {
-    pins.push(item.id);
-    pushToast(`Pinned "${item.title}" to Now`);
+    pushToast(f ? `Removed "${f.title}" from Now` : 'Removed from Now');
+    return;
   }
+  const f = resolveFocus(ref);
+  if(!f){ pushToast('That is no longer there to pin'); return; }
+  pins.push(ref);
+  pushToast(`Pinned "${f.title}" to Now`);
 }
 
 function toggleSubtask(item, subId){
   const s = item.subtasks.find(x=>x.id===subId);
   if(!s) return;
+  // Finishing a pinned milestone frees its slot. Nothing is promoted into it.
+  if(!s.done){
+    const pins = nowPins();
+    const at = pins.indexOf(msRef(item.id, subId));
+    if(at>=0) pins.splice(at,1);
+  }
   s.done = !s.done;
   s.doneAt = s.done ? new Date().toISOString() : null;
   if(s.done && !s.xpAwarded){ grantXP(XP_MILESTONE,'Milestone done'); s.xpAwarded=true; }
@@ -1690,7 +1760,7 @@ function scheduleMidnightRollover(){
 function renderNowView(){
   // Whatever was pinned, in the order it was put there. Nothing is added here
   // by the app, so a deleted item is the only reason a pin disappears.
-  const pins = nowPins().map(byId).filter(Boolean);
+  const pins = focusList();
   const pipeline = upNextCandidates().slice(0,6);
   const sub = !pins.length
     ? 'Nothing pinned. Pin what today is actually about — from the pipeline below, the Inbox, or any project.'
@@ -1704,40 +1774,66 @@ function renderNowView(){
     </div>
     <div class="focus-grid">
       ${pins.map((it,i)=>renderFocusCard(it,i,pins.length)).join('')}
-      ${pins.length<3? `<div class="focus-empty-slot">＋ Pin a task from the pipeline, Inbox or Projects</div>` : ''}
+      ${pins.length<3? `<div class="focus-empty-slot">＋ Pin a milestone or task from the pipeline, a project, or the Inbox</div>` : ''}
     </div>
     <div class="pipeline">
       <div class="pipeline-head">
         <div class="pipeline-title">⏭ Up next pipeline</div>
         <span class="view-sub" style="margin:0">Starred / high-priority — suggestions only, nothing moves into Now unless you put it there</span>
       </div>
-      ${pipeline.length? pipeline.map((it,i)=>renderPipelineRow(it,i)).join('') : `<div class="empty" style="padding:20px">Nothing queued — star a task to add it here.</div>`}
+      ${pipeline.length? pipeline.map((f,i)=>renderPipelineRow(f,i)).join('') : `<div class="empty" style="padding:20px">Nothing queued — star a project or a task to add it here.</div>`}
     </div>
     ${renderHabitStrip(true)}
   </div>`;
 }
 
-function renderFocusCard(it, i, len){
+/* A milestone has no item row of its own, so its meta is built from the project
+   it belongs to — which is also the answer to "where does this come from?". */
+function focusMeta(f){
+  if(f.kind==='task') return renderMeta(f.item);
+  const bits = [];
+  bits.push(`<span class="chip" style="${catStyle(f.project.category)}">${esc(f.project.category)}</span>`);
+  bits.push(`<button class="parent-chip" data-action="open-project-report" data-id="${f.project.id}" title="Open the project">📁 ${esc(f.project.title)}</button>`);
+  bits.push(`<span class="effort-chip" style="cursor:default">${(EFFORT[f.effort]||EFFORT[DEFAULT_EFFORT]).label}</span>`);
+  if(f.project.dueDate) bits.push(`<span style="${isOverdue(f.project)?'color:var(--c-danger);font-weight:700':''}">${fmtDue(f.project.dueDate)}</span>`);
+  return `<div class="item-meta">${bits.join('')}</div>`;
+}
+/* Ticking a pinned milestone must close the milestone itself, not an item. */
+function focusCheckAttrs(f){
+  return f.kind==='task'
+    ? `data-action="complete" data-id="${f.item.id}"`
+    : `data-action="toggle-subtask" data-id="${f.project.id}" data-sub="${f.sub.id}"`;
+}
+function focusOpenAttrs(f){
+  return f.kind==='task'
+    ? `data-action="open-item" data-id="${f.item.id}"`
+    : `data-action="open-project-report" data-id="${f.project.id}"`;
+}
+
+function renderFocusCard(f, i, len){
   return `<div class="focus-card" data-dnd-row>
-    <button class="check ${it.status==='done'?'done':''}" data-action="complete" data-id="${it.id}">${checkSvg()}</button>
+    <button class="check ${f.done?'done':''}" ${focusCheckAttrs(f)}>${checkSvg()}</button>
     <div class="focus-num" style="margin-left:-2px">${i+1}</div>
     <div class="item-main">
-      <div class="focus-title clickable-title ${it.status==='done'?'item-title done':''}" data-action="open-item" data-id="${it.id}" title="Where does this come from?">${esc(it.title)}</div>
-      ${renderMeta(it)}
+      <div class="focus-title clickable-title ${f.done?'item-title done':''}" ${focusOpenAttrs(f)} title="Where does this come from?">${esc(f.title)}</div>
+      ${focusMeta(f)}
     </div>
     <div class="item-actions">
-      ${moveTools('move-now', it.id, i, len)}
-      <button class="icon-btn btn-sm btn-danger" data-action="toggle-pin" data-id="${it.id}" title="Remove from Now — nothing will replace it">✕</button>
+      ${moveTools('move-now', f.ref, i, len)}
+      <button class="icon-btn btn-sm btn-danger" data-action="toggle-pin" data-id="${esc(f.ref)}" title="Remove from Now — nothing will replace it">✕</button>
     </div>
   </div>`;
 }
 
-function renderPipelineRow(it, i){
+function renderPipelineRow(f, i){
   return `<div class="pipeline-row">
     ${numLabel(i)}
-    <span class="dot pri-dot pri-${it.priority}"></span>
-    <div class="item-main"><div class="item-title clickable-title" data-action="open-item" data-id="${it.id}" title="Where does this come from?">${esc(it.title)}</div>${renderMeta(it)}</div>
-    <button class="btn btn-sm" data-action="toggle-pin" data-id="${it.id}">+ Now</button>
+    <span class="dot pri-dot pri-${f.priority}"></span>
+    <div class="item-main">
+      <div class="item-title clickable-title" ${focusOpenAttrs(f)} title="Where does this come from?">${esc(f.title)}</div>
+      ${focusMeta(f)}
+    </div>
+    <button class="btn btn-sm" data-action="toggle-pin" data-id="${esc(f.ref)}">+ Now</button>
   </div>`;
 }
 
@@ -2037,6 +2133,7 @@ function renderProjectBody(p, children){
           ${effortChip(s.effort, `data-id="${p.id}" data-sub="${s.id}"`)}
           <span style="flex:1;min-width:0;${s.done?'text-decoration:line-through;color:var(--c-text-muted)':''}">${esc(s.title)}</span>
           ${moveTools('move-subtask', p.id, si, p.subtasks.length, `data-id="${p.id}"`, p.id)}
+          <button class="icon-btn btn-sm" data-action="pin-milestone" data-id="${p.id}" data-sub="${s.id}" title="${nowPins().indexOf(msRef(p.id,s.id))>=0?'Unpin from Now':'Pin this milestone to Now'}" style="${nowPins().indexOf(msRef(p.id,s.id))>=0?'color:var(--c-focus)':''}">📌</button>
           <button class="icon-btn btn-sm" data-action="rename-subtask" data-id="${p.id}" data-sub="${s.id}" title="Rename milestone">✎</button>
           <button class="icon-btn btn-sm btn-danger" data-action="delete-subtask" data-id="${p.id}" data-sub="${s.id}" title="Delete milestone">✕</button>
         </div>`).join('') || `<div class="view-sub">No milestones yet.</div>`}
@@ -3745,7 +3842,9 @@ function handleAction(action, el){
     case 'complete': if(item) { completeItem(item); persist(); } break;
     case 'delete': if(item){ deleteItem(item.id); persist(); } break;
     case 'toggle-star': if(item){ toggleStar(item); persist(); } break;
-    case 'toggle-pin': if(item){ togglePin(item); persist(); } break;
+    // data-id is a focus reference: an item id, or a milestone's "ms:…" reference.
+    case 'toggle-pin': togglePin(id); persist(); break;
+    case 'pin-milestone': togglePin(msRef(id, el.getAttribute('data-sub'))); persist(); break;
     case 'toggle-archive': toggleInactive(id); break;
     case 'toggle-archived': ui.showArchived=!ui.showArchived; render(); break;
     case 'toggle-expand': {
