@@ -220,22 +220,27 @@ async function launch() {
   const hb1 = await page.evaluate(() => [...document.querySelectorAll('.habit-row')].map(r => r.innerText.split('\n')[0]));
   ok('habits reorder by drag', hb1[2] === hb0[0], { before: hb0, after: hb1 });
 
-  console.log('\nINBOX SCOPES — a filter must never hide what it labels');
+  console.log('\nINBOX SCOPES — one idea, one chip');
   await page.click('[data-action="nav"][data-view="inbox"]');
-  await page.click('[data-action="inbox-scope"][data-scope="unfiled"]');
   await page.waitForTimeout(300);
-  const unfiledRows = await page.locator('.item-row').count();
-  ok('captured tasks are chipped standalone AND unfiled',
-    /standalone · unfiled/.test(await page.locator('.item-row').first().innerText()));
+  const scopeLabels = await page.locator('[data-action="inbox-scope"]').allInnerTexts();
+  // "Unfiled" and "Standalone" were two chips for one idea; unfiled is now an
+  // ordering and a row marker inside Standalone.
+  ok('there is no separate Unfiled scope', !scopeLabels.some(t => /unfiled/i.test(t)), scopeLabels);
+  ok('four scopes remain', scopeLabels.length === 4, scopeLabels);
   await page.click('[data-action="inbox-scope"][data-scope="standalone"]');
   await page.waitForTimeout(300);
-  /* Standalone used to require a domain, so a task chipped "standalone" on its own
-     row disappeared from the Standalone scope. Unfiled is a subset of Standalone. */
-  ok('everything Unfiled also appears under Standalone',
-    await page.locator('.item-row').count() >= unfiledRows,
-    { unfiled: unfiledRows, standalone: await page.locator('.item-row').count() });
+  const topRow = await page.locator('.item-row').first().innerText();
+  ok('a task with no domain is marked, not hidden, and sorts to the top',
+    /needs a domain/.test(topRow), topRow.replace(/\n/g, ' '));
+  /* The badge counted anything in the Inbox domain, projects included, so a
+     project left there read as a number against an empty list. */
+  const badgeN = (await st()).items.filter(i => i.type === 'task' && i.category === 'Inbox' && i.status === 'open').length;
   await page.click('[data-action="inbox-scope"][data-scope="all"]');
   await page.waitForTimeout(300);
+  const processLabel = await page.locator('.view-head [data-action="process-inbox"]').innerText();
+  ok('the Process Inbox count matches what the list can actually show',
+    processLabel.includes('(' + badgeN + ')'), { label: processLabel, tasks: badgeN });
 
   console.log('\nMILESTONES — rename, delete, reorder');
   await page.click('[data-action="nav"][data-view="projects"]');
