@@ -31,7 +31,7 @@ const ok = (n, c, x) => {
    over the target row. Mirrors what a hand does — nothing is dispatched directly. */
 async function dragRow(page, rowSel, fromIdx, toIdx) {
   const rows = page.locator(rowSel);
-  const handle = rows.nth(fromIdx).locator('[data-dnd-handle]');
+  const handle = rows.nth(fromIdx).locator('[data-dnd-handle]').first();
   const hb = await handle.boundingBox();
   const tb = await rows.nth(toIdx).boundingBox();
   const x = hb.x + hb.width / 2;
@@ -180,6 +180,75 @@ async function launch() {
   const pinsDrag = await page.locator('.focus-card .focus-title').allInnerTexts();
   ok('Now pins reorder by drag', pinsDrag[1] === pinsDone[0] && pinsDrag[0] === pinsDone[1],
     { before: pinsDone, after: pinsDrag });
+
+  console.log('\nNOW — a milestone is a first-class focus item');
+  /* Pins were item ids and a milestone is not an item, while the pipeline filtered
+     to type==='task'. A plan made only of projects and milestones — the normal
+     shape — therefore left both surfaces permanently empty with no way to fill
+     them. Star a project and its next milestone must reach Now. */
+  await page.click('[data-action="nav"][data-view="projects"]');
+  await page.waitForTimeout(300);
+  const starTarget = page.locator('.project-card', { hasText: 'Site installation' });
+  await page.click('[data-action="nav"][data-view="now"]');
+  await page.waitForTimeout(400);
+  const pipeRows = await page.locator('.pipeline-row').count();
+  ok('a starred project puts its next milestone in the pipeline', pipeRows > 0, pipeRows);
+  const pipeText = await page.locator('.pipeline').innerText();
+  ok('  and the row names the project it came from', /📁/.test(pipeText));
+  // One row per project: a nine-step project must not crowd out everything else.
+  const projRefs = await page.evaluate(() =>
+    [...document.querySelectorAll('.pipeline-row [data-action="toggle-pin"]')].map(b => b.getAttribute('data-id')));
+  const msProjects = projRefs.filter(r => r.startsWith('ms:')).map(r => r.split(':')[1]);
+  ok('  at most one milestone per project', new Set(msProjects).size === msProjects.length, msProjects);
+
+  /* The fixture also has starred tasks, so the first pipeline row is not
+     necessarily a milestone — pick the milestone row by its reference. */
+  const msIdx = projRefs.findIndex(r => r.startsWith('ms:'));
+  ok('the pipeline contains at least one milestone', msIdx >= 0, projRefs);
+  const pipeTitle = await page.locator('.pipeline-row .item-title').nth(msIdx).innerText();
+  await page.locator('.pipeline-row [data-action="toggle-pin"]').nth(msIdx).click();
+  await page.waitForTimeout(500);
+  const pinRefs = (await st()).settings.nowPins;
+  ok('pinning stores a milestone reference', pinRefs.some(r => r.startsWith('ms:')), pinRefs);
+  ok('  and it shows in Now',
+    (await page.locator('.focus-card .focus-title').allInnerTexts()).includes(pipeTitle), pipeTitle);
+  ok('  and leaves the pipeline', !(await page.locator('.pipeline').innerText()).includes(pipeTitle));
+
+  // Ticking a pinned milestone must close the milestone on its project, not an item.
+  const pinnedCard = page.locator('.focus-card').filter({ hasText: pipeTitle }).first();
+  await pinnedCard.locator('.check').click();
+  await page.waitForTimeout(600);
+  const afterTick = await st();
+  ok('ticking it in Now closes the milestone itself',
+    afterTick.items.some(i => (i.subtasks || []).some(x => x.title === pipeTitle && x.done)), pipeTitle);
+  ok('  and frees that slot without substituting anything',
+    !afterTick.settings.nowPins.includes(pinRefs.find(r => r.startsWith('ms:'))),
+    afterTick.settings.nowPins);
+
+  // Pinning from inside a project is the other natural entry point.
+  await page.click('[data-action="nav"][data-view="projects"]');
+  await starTarget.locator('.project-head').click();
+  await page.waitForSelector('.sub-row');
+  ok('milestone rows carry a pin button',
+    await page.locator('.sub-row [data-action="pin-milestone"]').count() > 0);
+  const msTitle = await page.locator('.sub-row span[style*="flex"]').first().innerText();
+  await page.locator('.sub-row').first().locator('[data-action="pin-milestone"]').click();
+  await page.waitForTimeout(500);
+  await page.click('[data-action="nav"][data-view="now"]');
+  await page.waitForTimeout(400);
+  ok('pinning from a project lands it in Now',
+    (await page.locator('.focus-card .focus-title').allInnerTexts()).includes(msTitle), msTitle);
+  const msCard = page.locator('.focus-card').filter({ hasText: msTitle }).first();
+  const cardsBefore = await page.locator('.focus-card').count();
+  await msCard.locator('[data-action="toggle-pin"]').click();
+  await page.waitForTimeout(400);
+  ok('and unpinning a milestone removes exactly it',
+    !(await page.locator('.focus-card .focus-title').allInnerTexts()).includes(msTitle)
+    && await page.locator('.focus-card').count() === cardsBefore - 1);
+  // Collapse the project again: later blocks assume no card is expanded.
+  await page.click('[data-action="nav"][data-view="projects"]');
+  await starTarget.locator('.project-head').click();
+  await page.waitForTimeout(300);
 
   console.log('\nDRAG TO REORDER — every list, across more than one row');
   await page.click('[data-action="nav"][data-view="inbox"]');
