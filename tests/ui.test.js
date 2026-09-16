@@ -348,6 +348,76 @@ async function launch() {
   ok('a past week has no unreachable days',
     await page.locator('.habit-row').first().locator('.day-dot.future').count() === 0);
 
+  console.log('\nPROCESS INBOX — a button must do what its label says');
+  await page.click('[data-action="nav"][data-view="inbox"]');
+  await page.fill('#capture-input', 'Golf');
+  await page.click('[data-action="capture-add"]');
+  await page.waitForTimeout(200);
+  await page.click('.view-head [data-action="process-inbox"]');
+  await page.waitForSelector('.triage-card');
+  /* It read "Keep as task" while silently filing under whatever domain the
+     dropdown happened to be showing. The label now names that domain. */
+  const keepLabel = await page.locator('[data-action="triage-keep-task"]').innerText();
+  const selected = await page.locator('#triage-cat').inputValue();
+  ok('the file button names the domain it will use', keepLabel.includes(selected), { keepLabel, selected });
+  const triageOpts = await page.locator('#triage-cat option').allInnerTexts();
+  await page.selectOption('#triage-cat', triageOpts[1]);
+  await page.waitForTimeout(400);
+  ok('  and follows the dropdown when it changes',
+    (await page.locator('[data-action="triage-keep-task"]').innerText()).includes(triageOpts[1]));
+  ok('skip says that it leaves the item unfiled',
+    /leave it unfiled/i.test(await page.locator('[data-action="triage-skip"]').innerText()));
+  const triaged = await page.locator('.triage-title').innerText();
+  await page.click('[data-action="triage-keep-task"]');
+  await page.waitForTimeout(500);
+  const triagedItem = (await st()).items.find(i => i.title === triaged);
+  ok('it files under exactly the named domain', triagedItem.category === triageOpts[1],
+    { got: triagedItem.category, want: triageOpts[1] });
+  ok('  and never puts the task into a project', !triagedItem.projectId, triagedItem.projectId);
+  await page.click('[data-action="exit-triage"]');
+  await page.waitForTimeout(300);
+
+  console.log('\nFOLLOW-UPS — a person, their work, and a way to create it');
+  await page.click('[data-action="nav"][data-view="followups"]');
+  await page.waitForTimeout(400);
+  // Follow-ups was an island: no link to the same person as a task or project owner.
+  const untrackedCount = await page.locator('[data-action="track-person"]').count();
+  ok('people holding work but untracked are surfaced', untrackedCount > 0, untrackedCount);
+  const personLabel = await page.locator('[data-action="track-person"]').first().innerText();
+  const person = personLabel.replace(/^＋\s*/, '').replace(/\s*\(\d+\)$/, '');
+  await page.locator('[data-action="track-person"]').first().click();
+  await page.waitForSelector('#fu-name');
+  ok('tracking pre-fills their name', (await page.locator('#fu-name').inputValue()) === person, person);
+  // The domain used to be hardcoded to a life area that might not exist.
+  ok('the follow-up has a real domain picker', await page.locator('#fu-cat option').count() > 1);
+  ok('  and says how much they already hold', /already assigned/i.test(await page.locator('.modal').innerText()));
+  await page.click('[data-action="confirm-new-followup"]');
+  await page.waitForTimeout(600);
+  const fuRow = await page.locator('.item-row').first().innerText();
+  ok('the row shows the work that person holds', /open task|project/i.test(fuRow), fuRow.replace(/\n/g, ' '));
+  ok('and they leave the untracked list',
+    await page.locator('[data-action="track-person"]').count() === untrackedCount - 1);
+
+  // A follow-up can create the task it exists for, pre-assigned and linked back.
+  await page.locator('[data-action="add-followup-task"]').first().click();
+  await page.waitForSelector('#ft-title');
+  await page.fill('#ft-title', 'Chase the signed contract');
+  await page.click('[data-action="confirm-followup-task"]');
+  await page.waitForTimeout(600);
+  const chased = (await st()).items.find(i => i.title === 'Chase the signed contract');
+  ok('a follow-up creates a real Inbox task', !!chased);
+  ok('  assigned to that person', chased && chased.assignee === person, chased && chased.assignee);
+  ok('  and linked back to the follow-up', !!(chased && chased.followupId));
+
+  await page.click('[data-action="nav"][data-view="inbox"]');
+  await page.click('[data-action="filter-assignee"][data-assignee="all"]');
+  await page.waitForTimeout(400);
+  ok('the owner chip on a task is clickable', await page.locator('[data-action="goto-followup"]').count() > 0);
+  await page.locator('[data-action="goto-followup"]').first().click();
+  await page.waitForTimeout(500);
+  ok('  and jumps to Follow-ups',
+    await page.evaluate(() => document.querySelector('.view-title').textContent) === 'Follow-ups');
+
   console.log('\nREPORTS — every tab exports');
   await page.click('[data-action="nav"][data-view="reports"]');
   for (const tab of ['areas', 'projects', 'habits', 'timeline']) {
