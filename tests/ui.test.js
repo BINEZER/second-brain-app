@@ -229,10 +229,9 @@ async function launch() {
   await page.click('[data-action="nav"][data-view="projects"]');
   await starTarget.locator('.project-head').click();
   await page.waitForSelector('.sub-row');
-  ok('milestone rows carry a pin button',
-    await page.locator('.sub-row [data-action="pin-milestone"]').count() > 0);
+  ok('milestone rows carry a pin button', await page.locator('.sub-row .pin-btn').count() > 0);
   const msTitle = await page.locator('.sub-row span[style*="flex"]').first().innerText();
-  await page.locator('.sub-row').first().locator('[data-action="pin-milestone"]').click();
+  await page.locator('.sub-row').first().locator('.pin-btn').click();
   await page.waitForTimeout(500);
   await page.click('[data-action="nav"][data-view="now"]');
   await page.waitForTimeout(400);
@@ -248,6 +247,43 @@ async function launch() {
   // Collapse the project again: later blocks assume no card is expanded.
   await page.click('[data-action="nav"][data-view="projects"]');
   await starTarget.locator('.project-head').click();
+  await page.waitForTimeout(300);
+
+  console.log('\nPIN STATE — the same everywhere, so you can see what is already in Now');
+  /* Three lists rendered three different pin buttons: the Inbox tinted the icon,
+     milestones tinted it, and a task inside a project showed no pinned state at
+     all — so one already in Now looked identical to one that was not. */
+  await page.click('[data-action="nav"][data-view="inbox"]');
+  await page.waitForTimeout(300);
+  const pinRow = page.locator('.item-row').first();
+  ok('a pin button starts un-pinned',
+    !(await pinRow.locator('.pin-btn').getAttribute('class')).includes('pinned'));
+  await pinRow.locator('.pin-btn').click();
+  await page.waitForTimeout(400);
+  const pinnedBtn = page.locator('.item-row').first().locator('.pin-btn');
+  ok('  and shows as pinned once it is in Now',
+    (await pinnedBtn.getAttribute('class')).includes('pinned'));
+  ok('  with a title saying what a click does now',
+    /already in now/i.test(await pinnedBtn.getAttribute('title')));
+  ok('  and aria-pressed for anyone not seeing the styling',
+    (await pinnedBtn.getAttribute('aria-pressed')) === 'true');
+  // Pinned stays clickable: you must be able to take it out from where you are.
+  await pinnedBtn.click();
+  await page.waitForTimeout(400);
+  ok('clicking a pinned button takes it out of Now',
+    !(await page.locator('.item-row').first().locator('.pin-btn').getAttribute('class')).includes('pinned'));
+
+  // Every entry point renders the one shared control.
+  await page.click('[data-action="nav"][data-view="projects"]');
+  await page.locator('.project-card', { hasText: 'Site installation' }).locator('.project-head').click();
+  await page.waitForSelector('.sub-row');
+  ok('milestones and project tasks use the same pin control',
+    await page.locator('.sub-row .pin-btn').count() > 0
+    && await page.locator('.project-body .item-row .pin-btn').count() > 0);
+  ok('no list renders its own ad-hoc pin button',
+    await page.evaluate(() => [...document.querySelectorAll('[data-action="toggle-pin"]')]
+      .every(b => b.classList.contains('pin-btn') || b.classList.contains('btn-danger') || b.textContent.includes('Now'))));
+  await page.locator('.project-card', { hasText: 'Site installation' }).locator('.project-head').first().click();
   await page.waitForTimeout(300);
 
   console.log('\nDRAG TO REORDER — every list, across more than one row');

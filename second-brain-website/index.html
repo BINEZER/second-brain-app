@@ -213,6 +213,12 @@
       .rv-step .rv-tools{opacity:0;transition:opacity .12s;flex-shrink:0}
       .rv-step:hover .rv-tools,.rv-step .rv-tools:focus-within{opacity:1}
       @media (hover:none){ .rv-step .rv-tools{opacity:1} }
+      /* Already in Now reads as greyed out and spent, so a list scans as "these
+         are still available, that one is already taken". It stays clickable —
+         you must be able to take something out of Now from where you are — and
+         hover brings it back to full strength to say so. */
+      .pin-btn.pinned{background:var(--c-surface-alt);border-color:var(--c-border);opacity:.4;filter:grayscale(1)}
+      .pin-btn.pinned:hover{opacity:1;filter:none;border-color:var(--c-border-strong)}
       .drag-handle{width:26px;height:26px;border-radius:8px;border:1px solid transparent;background:transparent;
         color:var(--c-text-muted);font-size:14px;line-height:1;cursor:grab;touch-action:none;flex-shrink:0}
       .drag-handle:hover{background:var(--c-surface-alt);border-color:var(--c-border);color:var(--c-text-secondary)}
@@ -1433,6 +1439,19 @@ function resolveFocus(ref){
 }
 function focusList(){ return nowPins().map(resolveFocus).filter(Boolean); }
 
+/* Every place you can pin from renders this, so "already in Now" looks the same
+   everywhere. It used to differ per list — the Inbox tinted the icon, milestones
+   tinted it, and a task inside a project showed no pinned state at all, so one
+   already in Now was indistinguishable from one that was not.
+
+   Pinned is dimmed and filled rather than disabled: you still need to be able to
+   take something out of Now from the list you are looking at. */
+function pinButton(ref, extraAttrs){
+  const on = nowPins().indexOf(ref) >= 0;
+  return `<button class="icon-btn btn-sm pin-btn${on?' pinned':''}" data-action="toggle-pin" data-id="${esc(ref)}"${extraAttrs||''}
+    aria-pressed="${on}" title="${on?'Already in Now — click to take it out':'Pin to Now / Today'}">${on?'📍':'📌'}</button>`;
+}
+
 /* The next unfinished milestone of a project — what "work on this project" means
    in practice, and what the pipeline offers for a starred project. */
 function nextMilestone(p){
@@ -1865,7 +1884,7 @@ function renderPipelineRow(f, i){
       <div class="item-title clickable-title" ${focusOpenAttrs(f)} title="Where does this come from?">${esc(f.title)}</div>
       ${focusMeta(f)}
     </div>
-    <button class="btn btn-sm" data-action="toggle-pin" data-id="${esc(f.ref)}">+ Now</button>
+    <button class="btn btn-sm" data-action="toggle-pin" data-id="${esc(f.ref)}" title="Put this in Now">+ Now</button>
   </div>`;
 }
 
@@ -2016,7 +2035,6 @@ function renderInboxView(){
 
 let inboxViewLen = 0;
 function renderInboxRow(it, i){
-  const pinned = nowPins().indexOf(it.id)>=0;
   return `<div class="item-row" data-dnd-row>
     ${numLabel(i)}
     <button class="check ${it.status==='done'?'done':''}" data-action="complete" data-id="${it.id}">${checkSvg()}</button>
@@ -2026,7 +2044,7 @@ function renderInboxRow(it, i){
     </div>
     <div class="item-actions">
       ${moveTools('move-inbox', it.id, i, inboxViewLen)}
-      <button class="icon-btn btn-sm" data-action="toggle-pin" data-id="${it.id}" title="${pinned?'Unpin from Now':'Pin to Now / Today'}" style="${pinned?'color:var(--c-focus)':''}">📌</button>
+      ${pinButton(it.id)}
       <button class="btn btn-sm" data-action="convert-project" data-id="${it.id}" title="Convert to a Project">→ Project</button>
       <button class="btn btn-sm btn-ghost" data-action="open-editor" data-id="${it.id}">Edit</button>
       <button class="icon-btn btn-sm btn-danger" data-action="delete" data-id="${it.id}">✕</button>
@@ -2187,7 +2205,7 @@ function renderProjectBody(p, children){
           ${effortChip(s.effort, `data-id="${p.id}" data-sub="${s.id}"`)}
           <span style="flex:1;min-width:0;${s.done?'text-decoration:line-through;color:var(--c-text-muted)':''}">${esc(s.title)}</span>
           ${moveTools('move-subtask', p.id, si, p.subtasks.length, `data-id="${p.id}"`, p.id)}
-          <button class="icon-btn btn-sm" data-action="pin-milestone" data-id="${p.id}" data-sub="${s.id}" title="${nowPins().indexOf(msRef(p.id,s.id))>=0?'Unpin from Now':'Pin this milestone to Now'}" style="${nowPins().indexOf(msRef(p.id,s.id))>=0?'color:var(--c-focus)':''}">📌</button>
+          ${pinButton(msRef(p.id, s.id))}
           <button class="icon-btn btn-sm" data-action="rename-subtask" data-id="${p.id}" data-sub="${s.id}" title="Rename milestone">✎</button>
           <button class="icon-btn btn-sm btn-danger" data-action="delete-subtask" data-id="${p.id}" data-sub="${s.id}" title="Delete milestone">✕</button>
         </div>`).join('') || `<div class="view-sub">No milestones yet.</div>`}
@@ -2210,7 +2228,7 @@ function renderProjectBody(p, children){
           ${moveTools('move-child', p.id, ci, children.length, `data-id="${p.id}"`, p.id)}
           <button class="icon-btn btn-sm" data-action="open-editor" data-id="${c.id}" title="Edit task">✎</button>
           <button class="icon-btn btn-sm" data-action="toggle-star" data-id="${c.id}" title="Star">${c.isStarred?'⭐':'☆'}</button>
-          <button class="icon-btn btn-sm" data-action="toggle-pin" data-id="${c.id}" title="Pin to Now">📌</button>
+          ${pinButton(c.id)}
           <button class="icon-btn btn-sm btn-danger" data-action="delete" data-id="${c.id}">✕</button>
         </div>
       </div>`).join('') || `<div class="view-sub" style="margin-bottom:10px">No tasks yet.</div>`}
@@ -3958,7 +3976,6 @@ function handleAction(action, el){
     case 'toggle-star': if(item){ toggleStar(item); persist(); } break;
     // data-id is a focus reference: an item id, or a milestone's "ms:…" reference.
     case 'toggle-pin': togglePin(id); persist(); break;
-    case 'pin-milestone': togglePin(msRef(id, el.getAttribute('data-sub'))); persist(); break;
     case 'toggle-archive': toggleInactive(id); break;
     case 'toggle-archived': ui.showArchived=!ui.showArchived; render(); break;
     case 'toggle-expand': {
