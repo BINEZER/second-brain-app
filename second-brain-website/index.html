@@ -878,6 +878,37 @@ function openTasks(){ return items().filter(i=>i.type==='task' && i.status==='op
 function projects(){ return items().filter(i=>i.type==='project'); }
 function tasksOf(projectId){ return items().filter(i=>i.projectId===projectId); }
 function followups(){ return items().filter(i=>i.type==='followup'); }
+/* A follow-up and a task's assignee are the same person, so they are matched by
+   name, case-insensitively. Follow-ups used to be an island: no way to see what
+   that person owes you, and no way to turn "chase them" into an actual task. */
+function normPerson(n){ return String(n||'').trim().toLowerCase(); }
+function followupFor(name){
+  const k = normPerson(name);
+  return k ? followups().find(f=>normPerson(f.contactName||f.title)===k) || null : null;
+}
+function tasksForPerson(name){
+  const k = normPerson(name);
+  return k ? items().filter(i=>i.type==='task' && i.status==='open' && normPerson(i.assignee)===k) : [];
+}
+/* A person can own a whole project as well as loose tasks — both are work you
+   would chase them about, so both count toward tracking them. */
+function projectsForPerson(name){
+  const k = normPerson(name);
+  return k ? projects().filter(p=>p.status!=='done' && inactiveProjects.indexOf(p.id)===-1
+                                 && normPerson(p.assignee)===k) : [];
+}
+function worksForPerson(name){ return tasksForPerson(name).length + projectsForPerson(name).length; }
+/* Everyone the app knows about: task owners and tracked contacts, merged. */
+function knownPeople(){
+  const seen = new Map();
+  items().forEach(i=>{
+    [i.assignee, i.type==='followup' ? (i.contactName||i.title) : null].forEach(n=>{
+      const k = normPerson(n);
+      if(k && !seen.has(k)) seen.set(k, String(n).trim());
+    });
+  });
+  return Array.from(seen.values()).sort((a,b)=>a.localeCompare(b));
+}
 function nowPins(){ return state.state.settings.nowPins; }
 /* Optional 1., 2., 3. prefixes so a list can be talked about by position. */
 function numbersOn(){ return !!state.state.settings.numberLists; }
@@ -1450,7 +1481,7 @@ function newItem(partial){
     category:'Inbox', priority:'medium', dueDate:null, createdAt: new Date().toISOString(),
     completedAt:null, projectId:null, subtasks:[], assignee:null,
     contactName:null, lastContactDate:null, isStarred:false, xpAwarded:false, effort:DEFAULT_EFFORT, startDate:null,
-    seriesId:null, occursOn:null
+    seriesId:null, occursOn:null, followupId:null
   }, partial);
   items().push(it);
   return it;
@@ -1845,7 +1876,11 @@ function renderMeta(it){
   if(parent) bits.push(`<span class="parent-chip">📁 ${esc(parent.title)}</span>`);
   else if(series) bits.push(`<button class="parent-chip" data-action="open-series" data-series="${series.id}" title="${esc(recurrenceLabel(series))} — click to edit the cadence">${series.isChore?'🧹':'🔁'} ${esc(recurrenceLabel(series))}</button>`);
   else if(it.type==='task') bits.push(`<span class="parent-chip"${it.category==='Inbox'?' style="color:var(--c-warn);font-weight:700" title="Give it a domain with Process Inbox"':''}>${it.category==='Inbox'?'needs a domain':'standalone'}</span>`);
-  if(it.assignee) bits.push(`<span class="chip">👤 ${esc(it.assignee)}</span>`);
+  if(it.assignee){
+    const tracked = !!followupFor(it.assignee);
+    bits.push(`<button class="chip" data-action="goto-followup" data-person="${esc(it.assignee)}" title="${tracked?'Open their follow-up':'Not tracked yet — start a follow-up'}"${tracked?'':' style="border-style:dashed"'}>👤 ${esc(it.assignee)}</button>`);
+  }
+  if(it.followupId && byId(it.followupId)) bits.push(`<span class="parent-chip" title="Created from a follow-up">↩ follow-up</span>`);
   if(it.dueDate) bits.push(`<span style="${isOverdue(it)?'color:var(--c-danger);font-weight:700':''}">${fmtDue(it.dueDate)}</span>`);
   if(it.isStarred) bits.push('⭐');
   return `<div class="item-meta">${bits.join('')}</div>`;
@@ -2018,15 +2053,18 @@ function renderProcessInbox(){
     <div class="triage-card">
       <div class="triage-title">${esc(it.title)}</div>
       ${areas.length? `<div class="field" style="margin:14px 0 4px;text-align:left">
-        <label>File it under</label>
-        <select id="triage-cat">${areas.map(a=>`<option value="${esc(a.name)}" ${a.name===lastCat?'selected':''}>${esc(a.name)}</option>`).join('')}</select>
+        <label>Domain for this task</label>
+        <select id="triage-cat" data-action-change="triage-cat-changed">${areas.map(a=>`<option value="${esc(a.name)}" ${a.name===lastCat?'selected':''}>${esc(a.name)}</option>`).join('')}</select>
       </div>` : `<div class="view-sub" style="margin:12px 0">No life areas yet — add one under Manage domains on the Projects tab, then filing will work.</div>`}
       <div class="triage-actions">
-        <button class="btn" data-action="triage-keep-task" ${areas.length?'':'disabled'}>✅ Keep as task</button>
-        <button class="btn" data-action="triage-to-project" ${areas.length?'':'disabled'}>📁 It's a project</button>
+        ${/* The label names the domain it will actually use. It used to read
+              "Keep as task" while silently filing under whatever the dropdown
+              happened to be showing, which is not what the button said. */''}
+        <button class="btn" data-action="triage-keep-task" ${areas.length?'':'disabled'}>✅ File as task in ${esc(lastCat||'—')}</button>
+        <button class="btn" data-action="triage-to-project" ${areas.length?'':'disabled'}>📁 Turn into a project</button>
         <button class="btn" data-action="triage-snooze">🗓 Set due date</button>
         <button class="btn btn-danger" data-action="triage-delete">🗑 Delete</button>
-        <button class="btn btn-ghost full" data-action="triage-skip">Skip →</button>
+        <button class="btn btn-ghost full" data-action="triage-skip">Skip — leave it unfiled →</button>
         <button class="btn btn-ghost full" data-action="exit-triage">Exit processing</button>
       </div>
     </div>
@@ -2735,26 +2773,50 @@ function renderReportsTimelineView(){
 /* ---------- FOLLOW-UPS ---------- */
 function renderFollowupsView(){
   const list = followups();
+  // People carrying open work who are not being tracked — the gap worth closing.
+  const untracked = Array.from(new Set(items()
+    .filter(i=>i.assignee && ((i.type==='task' && i.status==='open') || i.type==='project'))
+    .map(i=>i.assignee)))
+    .filter(n=>!followupFor(n) && worksForPerson(n)>0)
+    .sort((a,b)=>a.localeCompare(b));
   return `<div class="view">
     <div class="view-head">
-      <div><div class="view-title">Follow-ups</div><div class="view-sub">People to check back in with.</div></div>
+      <div><div class="view-title">Follow-ups</div><div class="view-sub">People to check back in with, and what each of them owes you.</div></div>
       <button class="btn btn-primary" data-action="new-followup">+ Add contact</button>
     </div>
-    ${list.length? list.map(renderFollowupRow).join('') : `<div class="empty">No follow-ups tracked yet.</div>`}
+    ${list.length? list.map(renderFollowupRow).join('') : `<div class="empty">No follow-ups tracked yet. Add anyone you have to chase — a site engineer, a counterpart, the family businesses.</div>`}
+    ${untracked.length? `
+      <div class="section-label" style="margin-top:24px">Assigned work, nobody tracked</div>
+      <div class="view-sub" style="margin-bottom:10px">These people own open tasks but have no follow-up, so nothing reminds you to chase them.</div>
+      <div class="chip-row">
+        ${untracked.map(n=>`<button class="chip" data-action="track-person" data-person="${esc(n)}" title="Start tracking ${esc(n)}">＋ ${esc(n)} (${worksForPerson(n)})</button>`).join('')}
+      </div>` : ''}
   </div>`;
 }
 function renderFollowupRow(it){
+  const person = it.contactName || it.title;
   const days = it.lastContactDate ? Math.round((new Date(todayISO())-new Date(it.lastContactDate))/86400000) : null;
-  return `<div class="item-row">
+  const open = tasksForPerson(person);
+  const owned = projectsForPerson(person);
+  const overdue = open.filter(t=>isOverdue(t)).length;
+  return `<div class="item-row" data-dnd-row>
     <div class="item-main">
-      <div class="item-title">${esc(it.contactName||it.title)}</div>
+      <div class="item-title">${esc(person)}</div>
       <div class="item-meta">
-        ${days!=null? `<span>Last contact: ${days}d ago</span>` : '<span>No contact logged</span>'}
-        ${it.dueDate? `<span>Next by ${fmtDue(it.dueDate)}</span>`:''}
+        <span class="chip" style="${catStyle(it.category)}">${esc(it.category)}</span>
+        ${days!=null? `<span>Last contact ${days===0?'today':days+'d ago'}</span>` : '<span style="color:var(--c-warn);font-weight:600">No contact logged</span>'}
+        ${it.dueDate? `<span style="${isOverdue(it)?'color:var(--c-danger);font-weight:700':''}">Next by ${fmtDue(it.dueDate)}</span>`:''}
+        ${open.length
+          ? `<button class="parent-chip" data-action="view-person-tasks" data-person="${esc(person)}" title="Show these in the Inbox">📥 ${open.length} open task${open.length===1?'':'s'}${overdue?` · ${overdue} overdue`:''}</button>` : ''}
+        ${owned.length
+          ? `<button class="parent-chip" data-action="view-person-projects" data-person="${esc(person)}" title="Show these in Projects">📁 ${owned.length} project${owned.length===1?'':'s'}</button>` : ''}
+        ${!open.length && !owned.length ? '<span style="color:var(--c-text-muted)">nothing assigned</span>' : ''}
       </div>
     </div>
     <div class="item-actions">
+      <button class="btn btn-sm" data-action="add-followup-task" data-id="${it.id}" title="Create a task in the Inbox, assigned to ${esc(person)}">+ Task</button>
       <button class="btn btn-sm" data-action="log-contact" data-id="${it.id}">Log contact today</button>
+      <button class="icon-btn btn-sm" data-action="edit-followup" data-id="${it.id}" title="Edit">✎</button>
       <button class="icon-btn btn-sm btn-danger" data-action="delete" data-id="${it.id}">✕</button>
     </div>
   </div>`;
@@ -3078,16 +3140,52 @@ function modalNewProject(){
   setTimeout(()=>qs('#np-title')&&qs('#np-title').focus(),0);
 }
 
-function modalNewFollowup(){
+function modalFollowup(existing, presetName){
+  const areas = state.state.lifeAreas;
+  const f = existing || {};
+  const name = existing ? (f.contactName || f.title) : (presetName || '');
+  const cat = f.category || (areas[0] ? areas[0].name : 'Inbox');
   openModal(`
-    <h3>New follow-up</h3>
-    <div class="field"><label>Name</label><input id="fu-name" placeholder="Who?" /></div>
-    <div class="field"><label>Next contact by (optional)</label><input id="fu-due" type="date" /></div>
+    <h3>${existing?'Edit follow-up':'New follow-up'}</h3>
+    <div class="view-sub" style="margin-bottom:14px">Use the same spelling as you use for task owners — that is how the app matches a person to the work they hold.</div>
+    <div class="field"><label>Name</label>
+      <input id="fu-name" list="fu-people" value="${esc(name)}" placeholder="Who?" />
+      <datalist id="fu-people">${knownPeople().map(n=>`<option value="${esc(n)}"></option>`).join('')}</datalist>
+    </div>
+    <div class="field"><label>Domain</label>
+      <select id="fu-cat">
+        <option value="Inbox" ${cat==='Inbox'?'selected':''}>Inbox (unfiled)</option>
+        ${areas.map(a=>`<option value="${esc(a.name)}" ${cat===a.name?'selected':''}>${esc(a.name)}</option>`).join('')}
+      </select>
+    </div>
+    <div class="field"><label>Next contact by (optional)</label><input id="fu-due" type="date" value="${esc(f.dueDate||'')}"/></div>
+    <div class="field"><label>Last contacted (optional)</label><input id="fu-last" type="date" value="${esc(f.lastContactDate||'')}"/></div>
+    ${name && worksForPerson(name)? `<div class="view-sub" style="margin-bottom:10px">${worksForPerson(name)} open item${worksForPerson(name)===1?'':'s'} already assigned to this name.</div>`:''}
     <div class="modal-actions">
       <button class="btn" data-action="close-modal">Cancel</button>
-      <button class="btn btn-primary" data-action="confirm-new-followup">Add</button>
+      <button class="btn btn-primary" data-action="confirm-new-followup" ${existing?`data-id="${f.id}"`:''}>${existing?'Save':'Add'}</button>
     </div>`);
   setTimeout(()=>qs('#fu-name')&&qs('#fu-name').focus(),0);
+}
+function modalNewFollowup(presetName){ modalFollowup(null, presetName); }
+
+/* A follow-up's whole point is the thing you owe or are owed — so it can create
+   that task directly, pre-assigned and linked back here. */
+function modalFollowupTask(f){
+  const person = f.contactName || f.title;
+  openModal(`
+    <h3>New task for ${esc(person)}</h3>
+    <div class="view-sub" style="margin-bottom:14px">Lands in your Inbox, assigned to ${esc(person)}, and stays linked to this follow-up.</div>
+    <div class="field"><label>What</label><input id="ft-title" placeholder="Chase the signed contract" /></div>
+    <div class="field"><label>Due (optional)</label><input id="ft-due" type="date" /></div>
+    <div class="field"><label>Effort</label>
+      <select id="ft-effort">${EFFORT_ORDER.map(k=>`<option value="${k}" ${k===DEFAULT_EFFORT?'selected':''}>${EFFORT[k].label} — ${esc(EFFORT[k].title)}</option>`).join('')}</select>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" data-action="close-modal">Cancel</button>
+      <button class="btn btn-primary" data-action="confirm-followup-task" data-id="${f.id}">Add to Inbox</button>
+    </div>`);
+  setTimeout(()=>qs('#ft-title')&&qs('#ft-title').focus(),0);
 }
 
 function modalSnooze(item){
@@ -4282,14 +4380,68 @@ function handleAction(action, el){
     }
 
     case 'new-followup': modalNewFollowup(); break;
+    case 'edit-followup': if(item) modalFollowup(item); break;
+    case 'track-person': modalNewFollowup(el.getAttribute('data-person')); break;
     case 'confirm-new-followup': {
       const name = qs('#fu-name').value.trim();
+      if(!name){ pushToast('Give the person a name first'); break; }
+      const cat = qs('#fu-cat').value;
       const due = qs('#fu-due').value || null;
-      if(name){ newItem({title:name, type:'followup', contactName:name, category:'Personal / Self', dueDate:due}); closeModal(); persist(); }
+      const last = qs('#fu-last').value || null;
+      const dup = followupFor(name);
+      if(item){
+        Object.assign(item, {title:name, contactName:name, category:cat, dueDate:due, lastContactDate:last});
+      } else if(dup){
+        pushToast(`${dup.contactName||dup.title} is already tracked`);
+        closeModal(); break;
+      } else {
+        // The domain comes from the picker; it used to be hardcoded to a life area
+        // that may not exist, which left the follow-up filed nowhere.
+        newItem({title:name, type:'followup', contactName:name, category:cat, dueDate:due, lastContactDate:last});
+        const owed = tasksForPerson(name).length;
+        if(owed) pushToast(`Tracking ${name} — ${owed} open task${owed===1?'':'s'} already assigned to them`);
+      }
+      closeModal(); persist();
       break;
     }
     case 'log-contact': if(item){ item.lastContactDate = todayISO(); persist(); } break;
+    case 'add-followup-task': if(item) modalFollowupTask(item); break;
+    case 'confirm-followup-task': {
+      const f = byId(id);
+      const title = (qs('#ft-title').value||'').trim();
+      if(!f || !title){ pushToast('Give the task a name first'); break; }
+      const person = f.contactName || f.title;
+      newItem({ type:'task', title, assignee:person, category:f.category || 'Inbox',
+                dueDate: qs('#ft-due').value || null, effort: qs('#ft-effort').value, followupId:f.id });
+      closeModal(); persist();
+      pushToast(`Added to Inbox for ${person}`);
+      break;
+    }
+    /* Jump between a person and their work in both directions. */
+    case 'view-person-tasks': {
+      ui.view='inbox'; ui.processInbox=false; ui.inboxScope='all';
+      ui.inboxAssigneeFilter = el.getAttribute('data-person');
+      ui.inboxSearch=''; ui.inboxProject='all';
+      render();
+      break;
+    }
+    case 'view-person-projects': {
+      ui.view='projects'; ui.processInbox=false; ui.projectFilter='all';
+      ui.projectSearch = el.getAttribute('data-person');
+      render();
+      break;
+    }
+    case 'goto-followup': {
+      const person = el.getAttribute('data-person');
+      const f = followupFor(person);
+      ui.view='followups'; ui.processInbox=false;
+      render();
+      if(!f) modalNewFollowup(person);
+      break;
+    }
 
+    // Changing the domain re-renders so the button label keeps naming what it will do.
+    case 'triage-cat-changed': ui.triageLastCat = el.value; render(); break;
     case 'triage-keep-task': {
       const list = inboxItems(); const it = list[ui.triageIndex];
       const sel = qs('#triage-cat');
