@@ -357,21 +357,48 @@ async function launch() {
   await page.waitForSelector('.triage-card');
   /* It read "Keep as task" while silently filing under whatever domain the
      dropdown happened to be showing. The label now names that domain. */
-  const keepLabel = await page.locator('[data-action="triage-keep-task"]').innerText();
-  const selected = await page.locator('#triage-cat').inputValue();
-  ok('the file button names the domain it will use', keepLabel.includes(selected), { keepLabel, selected });
+  ok('the keep button stays short — the dropdown above already names the domain',
+    (await page.locator('[data-action="triage-keep-task"]').innerText()).trim() === '✅ Keep',
+    await page.locator('[data-action="triage-keep-task"]').innerText());
+  ok('  and its tooltip names the domain it will file into',
+    /file it in/i.test(await page.locator('[data-action="triage-keep-task"]').getAttribute('title')));
+  ok('skip says it leaves the item standalone',
+    /leave it standalone/i.test(await page.locator('[data-action="triage-skip"]').innerText()));
+
+  /* Skip advanced an index modulo the list length, so with one item left it
+     landed back on the same card and looked broken, and with several it cycled
+     forever. It now sets the item aside for this pass. */
+  const skipped = [];
+  const queueLen = (await st()).items.filter(i => i.type === 'task' && i.status === 'open' && i.category === 'Inbox').length;
+  for (let k = 0; k < queueLen; k++) {
+    skipped.push(await page.locator('.triage-title').innerText());
+    await page.click('[data-action="triage-skip"]');
+    await page.waitForTimeout(350);
+  }
+  ok('every skip shows a card not seen before', new Set(skipped).size === skipped.length, skipped);
+  ok('skipping everything finishes the pass',
+    /Done for now/.test(await page.locator('.triage-card').innerText()),
+    (await page.locator('.triage-card').innerText()).replace(/\n/g, ' '));
+  const afterSkip = await st();
+  ok('  and skipped items stay unfiled in the Inbox, with no project',
+    skipped.every(t => {
+      const it = afterSkip.items.find(x => x.title === t);
+      return it && it.category === 'Inbox' && !it.projectId;
+    }), skipped);
+  await page.click('[data-action="exit-triage"]');
+  await page.waitForTimeout(300);
+
+  // Keep still files into whatever the dropdown is showing.
+  await page.click('.view-head [data-action="process-inbox"]');
+  await page.waitForSelector('.triage-card');
   const triageOpts = await page.locator('#triage-cat option').allInnerTexts();
   await page.selectOption('#triage-cat', triageOpts[1]);
-  await page.waitForTimeout(400);
-  ok('  and follows the dropdown when it changes',
-    (await page.locator('[data-action="triage-keep-task"]').innerText()).includes(triageOpts[1]));
-  ok('skip says that it leaves the item unfiled',
-    /leave it unfiled/i.test(await page.locator('[data-action="triage-skip"]').innerText()));
+  await page.waitForTimeout(300);
   const triaged = await page.locator('.triage-title').innerText();
   await page.click('[data-action="triage-keep-task"]');
   await page.waitForTimeout(500);
   const triagedItem = (await st()).items.find(i => i.title === triaged);
-  ok('it files under exactly the named domain', triagedItem.category === triageOpts[1],
+  ok('keep files into the chosen domain', triagedItem.category === triageOpts[1],
     { got: triagedItem.category, want: triageOpts[1] });
   ok('  and never puts the task into a project', !triagedItem.projectId, triagedItem.projectId);
   await page.click('[data-action="exit-triage"]');
