@@ -213,6 +213,12 @@
       .rv-step .rv-tools{opacity:0;transition:opacity .12s;flex-shrink:0}
       .rv-step:hover .rv-tools,.rv-step .rv-tools:focus-within{opacity:1}
       @media (hover:none){ .rv-step .rv-tools{opacity:1} }
+      /* Already in Now reads as greyed out and spent, so a list scans as "these
+         are still available, that one is already taken". It stays clickable —
+         you must be able to take something out of Now from where you are — and
+         hover brings it back to full strength to say so. */
+      .pin-btn.pinned{background:var(--c-surface-alt);border-color:var(--c-border);opacity:.4;filter:grayscale(1)}
+      .pin-btn.pinned:hover{opacity:1;filter:none;border-color:var(--c-border-strong)}
       .drag-handle{width:26px;height:26px;border-radius:8px;border:1px solid transparent;background:transparent;
         color:var(--c-text-muted);font-size:14px;line-height:1;cursor:grab;touch-action:none;flex-shrink:0}
       .drag-handle:hover{background:var(--c-surface-alt);border-color:var(--c-border);color:var(--c-text-secondary)}
@@ -846,6 +852,8 @@ const ui = {
   expandedProjects: new Set(),
   showArchived: false,
   inboxAssigneeFilter: 'all', // assignee filter for Inbox view
+  inboxDate: 'all',           // all | overdue | today | week | nodate — due-date filter
+  inboxCategory: 'all',       // life-area filter for Inbox view
   historyRange: 'month',      // month | 30d | all | custom — completed-tasks filter in Reports
   historyCustomFrom: null,
   historyCustomTo: null,
@@ -1433,6 +1441,19 @@ function resolveFocus(ref){
 }
 function focusList(){ return nowPins().map(resolveFocus).filter(Boolean); }
 
+/* Every place you can pin from renders this, so "already in Now" looks the same
+   everywhere. It used to differ per list — the Inbox tinted the icon, milestones
+   tinted it, and a task inside a project showed no pinned state at all, so one
+   already in Now was indistinguishable from one that was not.
+
+   Pinned is dimmed and filled rather than disabled: you still need to be able to
+   take something out of Now from the list you are looking at. */
+function pinButton(ref, extraAttrs){
+  const on = nowPins().indexOf(ref) >= 0;
+  return `<button class="icon-btn btn-sm pin-btn${on?' pinned':''}" data-action="toggle-pin" data-id="${esc(ref)}"${extraAttrs||''}
+    aria-pressed="${on}" title="${on?'Already in Now — click to take it out':'Pin to Now / Today'}">${on?'📍':'📌'}</button>`;
+}
+
 /* The next unfinished milestone of a project — what "work on this project" means
    in practice, and what the pipeline offers for a starred project. */
 function nextMilestone(p){
@@ -1865,7 +1886,7 @@ function renderPipelineRow(f, i){
       <div class="item-title clickable-title" ${focusOpenAttrs(f)} title="Where does this come from?">${esc(f.title)}</div>
       ${focusMeta(f)}
     </div>
-    <button class="btn btn-sm" data-action="toggle-pin" data-id="${esc(f.ref)}">+ Now</button>
+    <button class="btn btn-sm" data-action="toggle-pin" data-id="${esc(f.ref)}" title="Put this in Now">+ Now</button>
   </div>`;
 }
 
@@ -1958,14 +1979,36 @@ function inboxScoped(){
 
 /* Exactly the rows the Inbox is showing, scope + filters + search applied.
    Rendering and reordering both call this, so row 3 on screen is row 3 here. */
-function inboxViewList(){
+/* Everything the Inbox is showing except the date filter. Kept separate so the
+   date chips can count what each one would actually reveal, rather than counting
+   against a list the date filter has already narrowed. */
+function inboxBaseList(){
   let list = inboxScoped();
   if(ui.inboxAssigneeFilter!=='all') list = list.filter(i=>i.assignee===ui.inboxAssigneeFilter);
   if(ui.inboxProject!=='all') list = list.filter(i=>i.projectId===ui.inboxProject);
+  if(ui.inboxCategory!=='all') list = list.filter(i=>i.category===ui.inboxCategory);
   if(ui.inboxSearch) list = list.filter(i=>matchesSearch(i.title, ui.inboxSearch)
     || matchesSearch(i.assignee, ui.inboxSearch)
     || matchesSearch(i.category, ui.inboxSearch)
     || (i.projectId && matchesSearch((byId(i.projectId)||{}).title, ui.inboxSearch)));
+  return list;
+}
+
+/* Due-date buckets. "Next 7 days" includes today, so Today is a subset of it —
+   they answer different questions and overlapping is the honest behaviour. */
+const INBOX_DATES = {
+  all:      { label:'Any date',    match: () => true },
+  overdue:  { label:'Overdue',     match: it => !!it.dueDate && it.dueDate < todayISO() },
+  today:    { label:'Today',       match: it => it.dueDate === todayISO() },
+  week:     { label:'Next 7 days', match: it => !!it.dueDate && it.dueDate >= todayISO() && it.dueDate <= fmtISO(addDays(new Date(),7)) },
+  nodate:   { label:'No date',     match: it => !it.dueDate }
+};
+function inboxDateKey(){ return INBOX_DATES[ui.inboxDate] ? ui.inboxDate : 'all'; }
+
+function inboxViewList(){
+  let list = inboxBaseList();
+  const key = inboxDateKey();
+  if(key!=='all') list = list.filter(INBOX_DATES[key].match);
   // Anything without a domain sorts first — that is the work the Inbox is for.
   // A stable partition, so manual ordering inside each half is preserved.
   const needsDomain = list.filter(i=>i.category==='Inbox');
@@ -1975,6 +2018,13 @@ function inboxViewList(){
 function renderInboxView(){
   const unfiled = inboxItems();
   const all = inboxScoped();
+  const dateBase = inboxBaseList();
+  // Only domains that actually hold something in this scope, with their counts —
+  // a picker that offers empty choices is just a longer list to read.
+  const domCounts = {};
+  inboxScoped().forEach(i=>{ domCounts[i.category] = (domCounts[i.category]||0)+1; });
+  if(ui.inboxCategory!=='all' && !domCounts[ui.inboxCategory]) domCounts[ui.inboxCategory] = 0;
+  const inboxDomains = Object.keys(domCounts).sort((a,b)=>a==='Inbox'?-1:b==='Inbox'?1:a.localeCompare(b)).map(k=>[k,domCounts[k]]);
   const projList = projects();
   const assignees = Array.from(new Set(allOpenTasks().filter(i=>i.assignee).map(i=>i.assignee))).sort();
   const list = inboxViewList();
@@ -1997,10 +2047,23 @@ function renderInboxView(){
     <div class="filter-bar">
       ${searchBox('inbox-search', ui.inboxSearch, 'Search tasks, projects, domains, owners…')}
       ${ui.inboxSearch? `<button class="btn btn-sm" data-action="clear-inbox-search">Clear</button>`:''}
+      ${inboxDomains.length? `<select data-action-change="inbox-category" style="font-size:13px;padding:7px 9px;border-radius:10px;border:1px solid var(--c-border);background:var(--c-surface);color:var(--c-text)">
+        <option value="all" ${ui.inboxCategory==='all'?'selected':''}>Any domain</option>
+        ${inboxDomains.map(([name,n])=>`<option value="${esc(name)}" ${ui.inboxCategory===name?'selected':''}>${esc(name)} (${n})</option>`).join('')}
+      </select>`:''}
       ${projList.length? `<select data-action-change="inbox-project" style="font-size:13px;padding:7px 9px;border-radius:10px;border:1px solid var(--c-border);background:var(--c-surface);color:var(--c-text)">
         <option value="all" ${ui.inboxProject==='all'?'selected':''}>Any project</option>
         ${projList.map(pr=>`<option value="${esc(pr.id)}" ${ui.inboxProject===pr.id?'selected':''}>${esc(pr.title)}</option>`).join('')}
       </select>`:''}
+      ${(ui.inboxCategory!=='all'||ui.inboxProject!=='all'||inboxDateKey()!=='all'||ui.inboxAssigneeFilter!=='all')
+        ? `<button class="btn btn-sm btn-ghost" data-action="clear-inbox-filters">Clear filters</button>` : ''}
+    </div>
+    <div class="chip-row">
+      ${Object.keys(INBOX_DATES).map(k=>{
+        const n = k==='all' ? dateBase.length : dateBase.filter(INBOX_DATES[k].match).length;
+        const danger = k==='overdue' && n;
+        return `<button class="chip ${inboxDateKey()===k?'on':''}" data-action="inbox-date" data-date="${k}"${danger?' style="color:var(--c-danger);font-weight:700"':''}>${INBOX_DATES[k].label} (${n})</button>`;
+      }).join('')}
     </div>
     ${assignees.length? `<div class="chip-row">
       <button class="chip ${ui.inboxAssigneeFilter==='all'?'on':''}" data-action="filter-assignee" data-assignee="all">All</button>
@@ -2009,6 +2072,7 @@ function renderInboxView(){
     ${(inboxViewLen = list.length, '')}
     ${list.length? list.map((it,i)=>renderInboxRow(it,i)).join('')
       : `<div class="empty">${ui.inboxSearch? 'Nothing matches that search.'
+          : (inboxDateKey()!=='all' || ui.inboxCategory!=='all')? `Nothing matches these filters. <button class="btn btn-sm" data-action="clear-inbox-filters" style="margin-left:8px">Clear filters</button>`
           : ui.inboxScope==='unfiled'? 'Inbox zero 🎉 — nothing waiting to be triaged.'
           : 'Nothing here yet.'}</div>`}
   </div>`;
@@ -2016,7 +2080,6 @@ function renderInboxView(){
 
 let inboxViewLen = 0;
 function renderInboxRow(it, i){
-  const pinned = nowPins().indexOf(it.id)>=0;
   return `<div class="item-row" data-dnd-row>
     ${numLabel(i)}
     <button class="check ${it.status==='done'?'done':''}" data-action="complete" data-id="${it.id}">${checkSvg()}</button>
@@ -2026,7 +2089,7 @@ function renderInboxRow(it, i){
     </div>
     <div class="item-actions">
       ${moveTools('move-inbox', it.id, i, inboxViewLen)}
-      <button class="icon-btn btn-sm" data-action="toggle-pin" data-id="${it.id}" title="${pinned?'Unpin from Now':'Pin to Now / Today'}" style="${pinned?'color:var(--c-focus)':''}">📌</button>
+      ${pinButton(it.id)}
       <button class="btn btn-sm" data-action="convert-project" data-id="${it.id}" title="Convert to a Project">→ Project</button>
       <button class="btn btn-sm btn-ghost" data-action="open-editor" data-id="${it.id}">Edit</button>
       <button class="icon-btn btn-sm btn-danger" data-action="delete" data-id="${it.id}">✕</button>
@@ -2187,7 +2250,7 @@ function renderProjectBody(p, children){
           ${effortChip(s.effort, `data-id="${p.id}" data-sub="${s.id}"`)}
           <span style="flex:1;min-width:0;${s.done?'text-decoration:line-through;color:var(--c-text-muted)':''}">${esc(s.title)}</span>
           ${moveTools('move-subtask', p.id, si, p.subtasks.length, `data-id="${p.id}"`, p.id)}
-          <button class="icon-btn btn-sm" data-action="pin-milestone" data-id="${p.id}" data-sub="${s.id}" title="${nowPins().indexOf(msRef(p.id,s.id))>=0?'Unpin from Now':'Pin this milestone to Now'}" style="${nowPins().indexOf(msRef(p.id,s.id))>=0?'color:var(--c-focus)':''}">📌</button>
+          ${pinButton(msRef(p.id, s.id))}
           <button class="icon-btn btn-sm" data-action="rename-subtask" data-id="${p.id}" data-sub="${s.id}" title="Rename milestone">✎</button>
           <button class="icon-btn btn-sm btn-danger" data-action="delete-subtask" data-id="${p.id}" data-sub="${s.id}" title="Delete milestone">✕</button>
         </div>`).join('') || `<div class="view-sub">No milestones yet.</div>`}
@@ -2210,7 +2273,7 @@ function renderProjectBody(p, children){
           ${moveTools('move-child', p.id, ci, children.length, `data-id="${p.id}"`, p.id)}
           <button class="icon-btn btn-sm" data-action="open-editor" data-id="${c.id}" title="Edit task">✎</button>
           <button class="icon-btn btn-sm" data-action="toggle-star" data-id="${c.id}" title="Star">${c.isStarred?'⭐':'☆'}</button>
-          <button class="icon-btn btn-sm" data-action="toggle-pin" data-id="${c.id}" title="Pin to Now">📌</button>
+          ${pinButton(c.id)}
           <button class="icon-btn btn-sm btn-danger" data-action="delete" data-id="${c.id}">✕</button>
         </div>
       </div>`).join('') || `<div class="view-sub" style="margin-bottom:10px">No tasks yet.</div>`}
@@ -3958,7 +4021,6 @@ function handleAction(action, el){
     case 'toggle-star': if(item){ toggleStar(item); persist(); } break;
     // data-id is a focus reference: an item id, or a milestone's "ms:…" reference.
     case 'toggle-pin': togglePin(id); persist(); break;
-    case 'pin-milestone': togglePin(msRef(id, el.getAttribute('data-sub'))); persist(); break;
     case 'toggle-archive': toggleInactive(id); break;
     case 'toggle-archived': ui.showArchived=!ui.showArchived; render(); break;
     case 'toggle-expand': {
@@ -4094,6 +4156,11 @@ function handleAction(action, el){
     case 'inbox-search-changed': ui.inboxSearch = el.value; render(); break;
     case 'clear-inbox-search': ui.inboxSearch=''; render(); break;
     case 'inbox-scope': ui.inboxScope = el.getAttribute('data-scope'); render(); break;
+    case 'inbox-date': ui.inboxDate = el.getAttribute('data-date'); render(); break;
+    case 'inbox-category': ui.inboxCategory = el.value; render(); break;
+    case 'clear-inbox-filters':
+      ui.inboxCategory='all'; ui.inboxProject='all'; ui.inboxDate='all'; ui.inboxAssigneeFilter='all';
+      render(); break;
     case 'inbox-project': ui.inboxProject = el.value; render(); break;
     case 'move-now': case 'move-inbox': case 'move-project': case 'move-subtask':
     case 'move-child': case 'move-habit': case 'move-recurrence': case 'move-review': {

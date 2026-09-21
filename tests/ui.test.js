@@ -229,10 +229,9 @@ async function launch() {
   await page.click('[data-action="nav"][data-view="projects"]');
   await starTarget.locator('.project-head').click();
   await page.waitForSelector('.sub-row');
-  ok('milestone rows carry a pin button',
-    await page.locator('.sub-row [data-action="pin-milestone"]').count() > 0);
+  ok('milestone rows carry a pin button', await page.locator('.sub-row .pin-btn').count() > 0);
   const msTitle = await page.locator('.sub-row span[style*="flex"]').first().innerText();
-  await page.locator('.sub-row').first().locator('[data-action="pin-milestone"]').click();
+  await page.locator('.sub-row').first().locator('.pin-btn').click();
   await page.waitForTimeout(500);
   await page.click('[data-action="nav"][data-view="now"]');
   await page.waitForTimeout(400);
@@ -248,6 +247,43 @@ async function launch() {
   // Collapse the project again: later blocks assume no card is expanded.
   await page.click('[data-action="nav"][data-view="projects"]');
   await starTarget.locator('.project-head').click();
+  await page.waitForTimeout(300);
+
+  console.log('\nPIN STATE — the same everywhere, so you can see what is already in Now');
+  /* Three lists rendered three different pin buttons: the Inbox tinted the icon,
+     milestones tinted it, and a task inside a project showed no pinned state at
+     all — so one already in Now looked identical to one that was not. */
+  await page.click('[data-action="nav"][data-view="inbox"]');
+  await page.waitForTimeout(300);
+  const pinRow = page.locator('.item-row').first();
+  ok('a pin button starts un-pinned',
+    !(await pinRow.locator('.pin-btn').getAttribute('class')).includes('pinned'));
+  await pinRow.locator('.pin-btn').click();
+  await page.waitForTimeout(400);
+  const pinnedBtn = page.locator('.item-row').first().locator('.pin-btn');
+  ok('  and shows as pinned once it is in Now',
+    (await pinnedBtn.getAttribute('class')).includes('pinned'));
+  ok('  with a title saying what a click does now',
+    /already in now/i.test(await pinnedBtn.getAttribute('title')));
+  ok('  and aria-pressed for anyone not seeing the styling',
+    (await pinnedBtn.getAttribute('aria-pressed')) === 'true');
+  // Pinned stays clickable: you must be able to take it out from where you are.
+  await pinnedBtn.click();
+  await page.waitForTimeout(400);
+  ok('clicking a pinned button takes it out of Now',
+    !(await page.locator('.item-row').first().locator('.pin-btn').getAttribute('class')).includes('pinned'));
+
+  // Every entry point renders the one shared control.
+  await page.click('[data-action="nav"][data-view="projects"]');
+  await page.locator('.project-card', { hasText: 'Site installation' }).locator('.project-head').click();
+  await page.waitForSelector('.sub-row');
+  ok('milestones and project tasks use the same pin control',
+    await page.locator('.sub-row .pin-btn').count() > 0
+    && await page.locator('.project-body .item-row .pin-btn').count() > 0);
+  ok('no list renders its own ad-hoc pin button',
+    await page.evaluate(() => [...document.querySelectorAll('[data-action="toggle-pin"]')]
+      .every(b => b.classList.contains('pin-btn') || b.classList.contains('btn-danger') || b.textContent.includes('Now'))));
+  await page.locator('.project-card', { hasText: 'Site installation' }).locator('.project-head').first().click();
   await page.waitForTimeout(300);
 
   console.log('\nDRAG TO REORDER — every list, across more than one row');
@@ -310,6 +346,69 @@ async function launch() {
   const processLabel = await page.locator('.view-head [data-action="process-inbox"]').innerText();
   ok('the Process Inbox count matches what the list can actually show',
     processLabel.includes('(' + badgeN + ')'), { label: processLabel, tasks: badgeN });
+
+  console.log('\nINBOX — due-date and domain filters');
+  await page.click('[data-action="nav"][data-view="inbox"]');
+  await page.click('[data-action="inbox-scope"][data-scope="all"]');
+  await page.waitForTimeout(300);
+  const dateChips = await page.locator('[data-action="inbox-date"]').allInnerTexts();
+  ok('the Inbox offers a date filter', dateChips.length === 5, dateChips);
+  /* Chip counts come from the list before the date filter, so each chip promises
+     what clicking it reveals rather than counting an already-narrowed list. */
+  const anyCount = await page.locator('.item-row').count();
+  ok('the "Any date" count matches the visible list',
+    dateChips[0].includes('(' + anyCount + ')'), { chip: dateChips[0], rows: anyCount });
+
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const weekEnd = new Date(); weekEnd.setDate(weekEnd.getDate() + 7);
+  const weekStr = weekEnd.toISOString().slice(0, 10);
+  const openNow = (await st()).items.filter(i => i.type === 'task' && i.status === 'open');
+  for (const [key, pred] of [
+    ['overdue', t => !!t.dueDate && t.dueDate < todayStr],
+    ['today',   t => t.dueDate === todayStr],
+    ['week',    t => !!t.dueDate && t.dueDate >= todayStr && t.dueDate <= weekStr],
+    ['nodate',  t => !t.dueDate]
+  ]) {
+    await page.click(`[data-action="inbox-date"][data-date="${key}"]`);
+    await page.waitForTimeout(350);
+    const want = openNow.filter(pred).map(t => t.title).sort();
+    const got = (await page.locator('.item-row .item-title').allInnerTexts()).sort();
+    ok(`the ${key} filter shows exactly those tasks`, JSON.stringify(got) === JSON.stringify(want), { got, want });
+  }
+  await page.click('[data-action="inbox-date"][data-date="all"]');
+  await page.waitForTimeout(300);
+
+  const domSel = page.locator('[data-action-change="inbox-category"]');
+  ok('the Inbox offers a domain filter', await domSel.count() === 1);
+  const domOpts = await domSel.locator('option').allInnerTexts();
+  // A picker offering a choice that yields nothing is just a longer list to read.
+  ok('it only lists domains that hold something, with counts',
+    domOpts.length > 1 && domOpts.slice(1).every(o => /\(\d+\)$/.test(o.trim())), domOpts);
+  const pickDomain = domOpts[1].replace(/\s*\(\d+\)$/, '');
+  await domSel.selectOption(pickDomain);
+  await page.waitForTimeout(400);
+  const domRows = await page.locator('.item-row .item-title').allInnerTexts();
+  const domWant = openNow.filter(t => t.category === pickDomain).map(t => t.title).sort();
+  ok('choosing a domain narrows to exactly that domain',
+    JSON.stringify(domRows.sort()) === JSON.stringify(domWant), { got: domRows, want: domWant });
+  ok('  and the date counts follow the domain',
+    (await page.locator('[data-action="inbox-date"]').allInnerTexts())[0].includes('(' + domWant.length + ')'),
+    (await page.locator('[data-action="inbox-date"]').allInnerTexts())[0]);
+
+  // Filters combine, and an empty result must offer the way out.
+  await page.click('[data-action="inbox-scope"][data-scope="recurring"]');
+  await page.waitForTimeout(350);
+  const filterEmpty = await page.locator('.empty').innerText();
+  ok('an empty filtered view offers a way out', /clear filters/i.test(filterEmpty), filterEmpty);
+  await page.locator('.empty [data-action="clear-inbox-filters"]').click();
+  await page.waitForTimeout(350);
+  ok('  and clearing resets the date filter',
+    (await page.locator('[data-action="inbox-date"][data-date="all"]').getAttribute('class')).includes('on'));
+  /* The domain picker is only rendered when the scope holds something, so check it
+     back in a scope that does — its absence in an empty scope is correct. */
+  await page.click('[data-action="inbox-scope"][data-scope="all"]');
+  await page.waitForTimeout(350);
+  ok('  and the domain picker too', (await domSel.inputValue()) === 'all', await domSel.inputValue());
 
   console.log('\nMILESTONES — rename, delete, reorder');
   await page.click('[data-action="nav"][data-view="projects"]');
