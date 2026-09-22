@@ -487,6 +487,37 @@ async function launch() {
   await page.click('[data-action="exit-triage"]');
   await page.waitForTimeout(300);
 
+  /* Setting a due date used to save through a modal that then set the card aside,
+     so the domain could never be chosen for the same item. The date is a field on
+     the card now and editing it stays put. */
+  await page.click('.view-head [data-action="process-inbox"]');
+  await page.waitForSelector('.triage-card');
+  ok('the due date is a field on the card', await page.locator('#triage-due').count() === 1);
+  ok('  and there is no separate date modal to open',
+    await page.locator('[data-action="triage-snooze"]').count() === 0);
+  const dateCard = await page.locator('.triage-title').innerText();
+  await page.fill('#triage-due', '2026-11-20');
+  await page.waitForTimeout(500);
+  ok('setting a date keeps you on the same card',
+    (await page.locator('.triage-title').innerText()) === dateCard,
+    { was: dateCard, now: await page.locator('.triage-title').innerText() });
+  ok('  and saves it straight away',
+    (await st()).items.find(i => i.title === dateCard).dueDate === '2026-11-20');
+  ok('  without filing the item', (await st()).items.find(i => i.title === dateCard).category === 'Inbox');
+  const dateOpts = await page.locator('#triage-cat option').allInnerTexts();
+  await page.selectOption('#triage-cat', dateOpts[1]);
+  await page.waitForTimeout(400);
+  ok('a domain can then be chosen for the same item, date intact',
+    (await page.locator('.triage-title').innerText()) === dateCard
+    && (await page.locator('#triage-due').inputValue()) === '2026-11-20');
+  await page.click('[data-action="triage-keep-task"]');
+  await page.waitForTimeout(600);
+  const bothSet = (await st()).items.find(i => i.title === dateCard);
+  ok('Keep applies domain and date together', bothSet.category === dateOpts[1] && bothSet.dueDate === '2026-11-20',
+    { category: bothSet.category, dueDate: bothSet.dueDate });
+  await page.click('[data-action="exit-triage"]');
+  await page.waitForTimeout(300);
+
   // Keep still files into whatever the dropdown is showing.
   await page.click('.view-head [data-action="process-inbox"]');
   await page.waitForSelector('.triage-card');

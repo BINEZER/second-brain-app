@@ -2138,10 +2138,14 @@ function renderProcessInbox(){
         <label>Domain for this task</label>
         <select id="triage-cat" data-action-change="triage-cat-changed">${areas.map(a=>`<option value="${esc(a.name)}" ${a.name===lastCat?'selected':''}>${esc(a.name)}</option>`).join('')}</select>
       </div>` : `<div class="view-sub" style="margin:12px 0">No life areas yet — add one under Manage domains on the Projects tab, then filing will work.</div>`}
+      <div class="field" style="margin:0 0 6px;text-align:left">
+        <label>Due date (optional)</label>
+        <input id="triage-due" type="date" value="${esc(it.dueDate||'')}" data-action-change="triage-due-changed"/>
+        <div class="view-sub" style="margin:4px 0 0">Saved as you set it. Nothing moves on until you press Keep or Skip.</div>
+      </div>
       <div class="triage-actions">
         <button class="btn" data-action="triage-keep-task" ${areas.length?'':'disabled'} title="Keep this task and file it in ${esc(lastCat||'the chosen domain')}">✅ Keep</button>
         <button class="btn" data-action="triage-to-project" ${areas.length?'':'disabled'}>📁 Turn into a project</button>
-        <button class="btn" data-action="triage-snooze">🗓 Set due date</button>
         <button class="btn btn-danger" data-action="triage-delete">🗑 Delete</button>
         <button class="btn btn-ghost full" data-action="triage-skip" title="Leaves it unfiled in your Inbox as a standalone task">Skip — leave it standalone →</button>
         <button class="btn btn-ghost full" data-action="exit-triage">Exit processing</button>
@@ -3265,16 +3269,6 @@ function modalFollowupTask(f){
       <button class="btn btn-primary" data-action="confirm-followup-task" data-id="${f.id}">Add to Inbox</button>
     </div>`);
   setTimeout(()=>qs('#ft-title')&&qs('#ft-title').focus(),0);
-}
-
-function modalSnooze(item){
-  openModal(`
-    <h3>Set due date</h3>
-    <div class="field"><label>Due date</label><input id="sn-date" type="date" value="${item.dueDate||''}"/></div>
-    <div class="modal-actions">
-      <button class="btn" data-action="close-modal">Cancel</button>
-      <button class="btn btn-primary" data-action="confirm-snooze" data-id="${item.id}">Save</button>
-    </div>`);
 }
 
 function modalConfirmReset(){
@@ -4531,9 +4525,13 @@ function handleAction(action, el){
       const cat = sel && sel.value;
       if(!it) break;
       if(!cat){ pushToast('Add a life area first — Projects → Manage domains'); break; }
+      // Read the date straight off the field too: a value typed but not yet
+      // committed by a change event would otherwise be lost on filing.
+      const dueEl = qs('#triage-due');
+      if(dueEl) it.dueDate = dueEl.value || null;
       it.category = cat;
       ui.triageLastCat = cat;
-      pushToast(`"${it.title}" filed under ${cat}`);
+      pushToast(`"${it.title}" filed under ${cat}${it.dueDate? `, due ${fmtDue(it.dueDate)}`:''}`);
       persist(); break;
     }
     case 'triage-to-project': {
@@ -4541,21 +4539,14 @@ function handleAction(action, el){
       if(it) modalConvertToProject(it);
       break;
     }
-    case 'triage-snooze': {
+    case 'triage-due-changed': {
       const it = triageCurrent();
-      if(it) modalSnooze(it);
-      break;
-    }
-    case 'confirm-snooze': {
-      if(item){
-        item.dueDate = qs('#sn-date').value || null;
-        closeModal();
-        pushToast(item.dueDate? `Due ${fmtDue(item.dueDate)} — still in the Inbox to file` : 'Due date cleared');
-        // A date alone does not file the item, so move on to the next card rather than
-        // sitting on one that looks unchanged.
-        if(ui.processInbox && item.id){ if(ui.triageSkipped.indexOf(item.id)<0) ui.triageSkipped.push(item.id); }
-        persist();
-      }
+      if(!it) break;
+      it.dueDate = el.value || null;
+      // Stay on this card. Setting a date is not a decision about where the item
+      // belongs, so the owner may still want to pick a domain before moving on.
+      pushToast(it.dueDate? `Due ${fmtDue(it.dueDate)} — still on this card` : 'Due date cleared');
+      persist();
       break;
     }
     case 'triage-delete': {
