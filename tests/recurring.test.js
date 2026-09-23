@@ -157,5 +157,51 @@ eq('the badge counts unfiled tasks only, not projects', inboxItems().length, 1);
 eq('  and it equals what the Inbox lists', inboxItems().length,
   items().filter(i => i.type === 'task' && i.status === 'open' && i.category === 'Inbox').length);
 
+/* ---- brag file: what it counts, and what it must not double-count ---- */
+resetApp();
+(function(){
+  const iso = n => { const d = new Date(); d.setDate(d.getDate()+n); return d.toISOString(); };
+  const msOf = (t, off, eff) => ({ id: __in('uid()'), title: t, done: true, doneAt: iso(off), effort: eff, xpAwarded: true });
+  const DOM = 'Work — IntelMotion / Intel Group';
+
+  // A project delivered inside the window, with its own closed steps.
+  newItem({ type:'project', title:'Sales Academy rollout', category:DOM, status:'done',
+    completedAt: iso(-4), assignee:'Demitu',
+    subtasks:[ msOf('Curriculum written',-12,'L'), msOf('First cohort run',-5,'XL') ] });
+  // A project only advanced.
+  newItem({ type:'project', title:'Operating System', category:DOM,
+    subtasks:[ msOf('SOP suite drafted',-9,'L'), msOf('KPI dashboard live',-3,'M'),
+               { id:__in('uid()'), title:'ISO gap analysis', done:false, doneAt:null, effort:'XL', xpAwarded:false } ] });
+  newItem({ type:'task', title:'Renew the SNDF contract', category:DOM, status:'done', completedAt: iso(-2), effort:'L' });
+  newItem({ type:'task', title:'Payroll run', category:DOM, status:'done', completedAt: iso(-20), effort:'S', seriesId:'s1' });
+  newItem({ type:'task', title:'Payroll run', category:DOM, status:'done', completedAt: iso(-50), effort:'S', seriesId:'s1' });
+  // Another domain, and something outside the window: both must be excluded.
+  newItem({ type:'task', title:'Something at home', category:'Home', status:'done', completedAt: iso(-3) });
+  newItem({ type:'task', title:'Ancient history', category:DOM, status:'done', completedAt: iso(-400), effort:'XL' });
+
+  const d = __in('bragData')('quarter', DOM);
+  eq('one project reported as delivered', d.projectsDone.length, 1);
+  /* A delivered project must not also appear under "moved forward" — it is
+     already the stronger claim and listing it twice reads as padding. */
+  ok('the delivered project is not also listed as advanced',
+    !d.advanced.some(x => x.project.title === 'Sales Academy rollout'),
+    d.advanced.map(x => x.project.title));
+  eq('one project reported as advanced', d.advanced.length, 1);
+  // Its steps still count, they are just not listed separately.
+  eq('milestones count steps from delivered and advanced projects alike', d.milestoneCount, 4);
+  eq('recurring work is separated from one-off tasks', d.recurring.length, 2);
+  eq('  and the one-off is standalone', d.standalone.length, 1);
+  ok('another domain is excluded', !d.tasksDone.some(t => t.category === 'Home'));
+  ok('work outside the window is excluded', !d.tasksDone.some(t => t.title === 'Ancient history'));
+  // L+XL (delivered) + L+M (advanced) + L (task) + S + S (recurring) = 3+5+3+2+3+1+1
+  eq('effort points total every closed unit in the window', d.points, 18);
+  ok('people worked with are collected', d.people.indexOf('Demitu') >= 0, d.people);
+
+  const wk = __in('bragData')('week', DOM);
+  ok('a shorter window reports less', wk.milestoneCount <= d.milestoneCount, { week: wk.milestoneCount, quarter: d.milestoneCount });
+  const allDom = __in('bragData')('quarter', 'all');
+  ok('"all areas" includes the other domain', allDom.tasksDone.some(t => t.category === 'Home'));
+})();
+
 console.log(`recurring: ${passes} passed, ${fails} failed`);
 process.exit(fails ? 1 : 0);

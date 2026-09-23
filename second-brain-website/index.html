@@ -860,6 +860,8 @@ const ui = {
   historyWeekOffset: 0,       // weeks back from current, for the Reports habit-history pager
   reportsTab: 'areas',        // areas | projects | habits | timeline
   recurringFilter: 'all',     // all | tasks | chores — Recurring view
+  bragRange: 'month',         // week | month | quarter | year | all — brag file period
+  bragDomain: null,           // null = pick the day-job domain automatically
   reviewTab: 'daily',         // daily | weekly | monthly
   projectHealthFilter: 'all', // all | offtrack | stalled | noplan — Reports > Projects
   projectSearch: '',          // free-text filter on the Projects tab
@@ -2824,7 +2826,30 @@ function renderReportsTimelineView(){
   const all = completedItems();
   const filtered = all.filter(inHistoryRange).sort((a,b)=>b.completedAt.localeCompare(a.completedAt));
   const rangeLabel = {month:'this month', '30d':'in the last 30 days', all:'yet', custom:'in this range'}[ui.historyRange] || '';
+  // Domains that actually hold completed work, so the picker never offers a dead choice.
+  const bragDomains = Array.from(new Set(completedItems().map(i=>i.category)))
+    .concat(projects().filter(p=>(p.subtasks||[]).some(sx=>sx.done)).map(p=>p.category))
+    .filter((v,i,a)=>a.indexOf(v)===i).sort();
+  // Default to whichever domain looks like the day job, so the common case is one click.
+  const bragDomain = bragDomains.indexOf(ui.bragDomain)>=0 ? ui.bragDomain
+    : (bragDomains.find(n=>/intelmotion|intel group/i.test(n)) || 'all');
   return `
+    <div class="card" style="margin-bottom:20px;padding:16px 18px">
+      <div style="font-weight:600;font-size:14.5px;margin-bottom:2px">Brag file</div>
+      <div class="view-sub" style="margin-bottom:12px">What you delivered, written up as a Word document — grouped by project and led by outcomes, for the next time someone asks what you have been doing.</div>
+      <div class="filter-bar" style="margin-bottom:0">
+        <select data-action-change="brag-domain" style="font-size:13px;padding:7px 9px;border-radius:10px;border:1px solid var(--c-border);background:var(--c-surface);color:var(--c-text)">
+          <option value="all" ${bragDomain==='all'?'selected':''}>All areas</option>
+          ${bragDomains.map(n=>`<option value="${esc(n)}" ${bragDomain===n?'selected':''}>${esc(n)}</option>`).join('')}
+        </select>
+        <select data-action-change="brag-range" style="font-size:13px;padding:7px 9px;border-radius:10px;border:1px solid var(--c-border);background:var(--c-surface);color:var(--c-text)">
+          ${Object.keys(BRAG_RANGES).map(k=>`<option value="${k}" ${ui.bragRange===k?'selected':''}>${BRAG_RANGES[k].label}</option>`).join('')}
+        </select>
+        <button class="btn btn-primary" data-action="export-brag">⇩ Download .docx</button>
+      </div>
+      ${(()=>{ const d = bragData(ui.bragRange, bragDomain);
+        return `<div class="view-sub" style="margin:10px 0 0">Will contain ${d.projectsDone.length} project${d.projectsDone.length===1?'':'s'} delivered, ${d.advanced.length} advanced, ${d.milestoneCount} milestone${d.milestoneCount===1?'':'s'} and ${d.tasksDone.length} task${d.tasksDone.length===1?'':'s'} closed — ${d.points} effort points in all.</div>`; })()}
+    </div>
     <div class="section-label" style="margin-top:0">Completed tasks</div>
     <div class="chip-row">
       <button class="chip ${ui.historyRange==='month'?'on':''}" data-action="history-range" data-range="month">This month</button>
@@ -3726,6 +3751,277 @@ function renderImportPlan(){
 }
 
 /* =========================================================
+   Real .docx writer — no external library
+
+   The exports below this build HTML with a Word MIME type and a .doc extension.
+   Word opens those, but they are not OOXML, and a file you hand an employer
+   should be the real thing. A .docx is a ZIP of XML parts, and a ZIP written
+   with no compression ("stored") needs only a CRC32 and two header records per
+   entry — small enough to do here rather than take on a dependency.
+   ========================================================= */
+const CRC_TABLE = (function(){
+  const t = new Uint32Array(256);
+  for(let n=0;n<256;n++){
+    let c = n;
+    for(let k=0;k<8;k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+    t[n] = c >>> 0;
+  }
+  return t;
+})();
+function crc32(bytes){
+  let c = 0xFFFFFFFF;
+  for(let i=0;i<bytes.length;i++) c = CRC_TABLE[(c ^ bytes[i]) & 0xFF] ^ (c >>> 8);
+  return (c ^ 0xFFFFFFFF) >>> 0;
+}
+/* Entries are {name, text}. Everything is stored, never deflated: a brag file is
+   a few kilobytes, and skipping compression removes the only part of the format
+   that would need a real implementation. */
+function zipStore(entries){
+  const enc = new TextEncoder();
+  const chunks = [], central = [];
+  let offset = 0;
+  const u16 = n => [n & 0xFF, (n>>>8) & 0xFF];
+  const u32 = n => [n & 0xFF, (n>>>8) & 0xFF, (n>>>16) & 0xFF, (n>>>24) & 0xFF];
+
+  entries.forEach(e=>{
+    const name = enc.encode(e.name);
+    const data = enc.encode(e.text);
+    const crc = crc32(data);
+    const local = [].concat(
+      u32(0x04034b50), u16(20), u16(0), u16(0), u16(0), u16(0),
+      u32(crc), u32(data.length), u32(data.length), u16(name.length), u16(0)
+    );
+    chunks.push(new Uint8Array(local), name, data);
+    central.push([].concat(
+      u32(0x02014b50), u16(20), u16(20), u16(0), u16(0), u16(0), u16(0),
+      u32(crc), u32(data.length), u32(data.length),
+      u16(name.length), u16(0), u16(0), u16(0), u16(0), u32(0), u32(offset)
+    ), name);
+    offset += local.length + name.length + data.length;
+  });
+
+  const dirStart = offset;
+  let dirSize = 0;
+  const dirChunks = [];
+  for(let i=0;i<central.length;i+=2){
+    const head = new Uint8Array(central[i]), name = central[i+1];
+    dirChunks.push(head, name);
+    dirSize += head.length + name.length;
+  }
+  const end = new Uint8Array([].concat(
+    u32(0x06054b50), u16(0), u16(0), u16(entries.length), u16(entries.length),
+    u32(dirSize), u32(dirStart), u16(0)
+  ));
+  return new Blob(chunks.concat(dirChunks, [end]), {type:'application/vnd.openxmlformats-officedocument.wordprocessingml.document'});
+}
+
+function xmlEsc(v){
+  return String(v==null?'':v)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;').replace(/'/g,'&apos;');
+}
+/* Paragraph builders. Each returns one <w:p>; runs carry their own formatting so
+   a line can mix bold and plain without a style for every combination. */
+const DX = {
+  para(runs, opts){
+    opts = opts || {};
+    const pPr = `<w:pPr>${opts.style?`<w:pStyle w:val="${opts.style}"/>`:''}${opts.bullet?'<w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr>':''}${opts.spaceAfter!=null?`<w:spacing w:after="${opts.spaceAfter}"/>`:''}</w:pPr>`;
+    const body = (Array.isArray(runs)?runs:[runs]).map(r=>{
+      const t = typeof r==='string' ? {text:r} : r;
+      const rPr = `<w:rPr>${t.b?'<w:b/>':''}${t.i?'<w:i/>':''}${t.color?`<w:color w:val="${t.color}"/>`:''}${t.size?`<w:sz w:val="${t.size*2}"/>`:''}</w:rPr>`;
+      return `<w:r>${rPr}<w:t xml:space="preserve">${xmlEsc(t.text)}</w:t></w:r>`;
+    }).join('');
+    return `<w:p>${pPr}${body}</w:p>`;
+  },
+  h1(text){ return DX.para([{text, b:true, size:20, color:'1E293B'}], {spaceAfter:80}); },
+  h2(text){ return DX.para([{text:text.toUpperCase(), b:true, size:11, color:'475569'}], {spaceAfter:60}); },
+  muted(text){ return DX.para([{text, color:'94A3B8', size:9}], {spaceAfter:120}); },
+  bullet(runs){ return DX.para(runs, {bullet:true}); },
+  spacer(){ return DX.para([{text:''}]); },
+  table(rows){
+    const cell = (v,b)=>`<w:tc><w:tcPr><w:tcW w:w="4680" w:type="dxa"/></w:tcPr>${DX.para([{text:String(v), b:!!b}])}</w:tc>`;
+    return `<w:tbl><w:tblPr><w:tblStyle w:val="TableGrid"/><w:tblW w:w="0" w:type="auto"/>
+      <w:tblBorders>${['top','left','bottom','right','insideH','insideV'].map(k=>`<w:${k} w:val="single" w:sz="4" w:space="0" w:color="E2E8F0"/>`).join('')}</w:tblBorders>
+      </w:tblPr>${rows.map(r=>`<w:tr>${cell(r[0], r[2]!==false)}${cell(r[1])}</w:tr>`).join('')}</w:tbl>` + DX.spacer();
+  }
+};
+
+/* =========================================================
+   Brag file
+
+   A brag document is not a task list. Asked "what did you do this quarter", the
+   answer is what shipped and what moved — grouped by the thing it belonged to,
+   led by outcomes, with the numbers behind it. So closed milestones are rolled
+   up under their project and reported with where that project now stands,
+   rather than listed as forty separate rows nobody reads.
+   ========================================================= */
+const BRAG_RANGES = {
+  week:    { label:'This week',     from: () => fmtISO(startOfWeek(new Date())) },
+  month:   { label:'This month',    from: () => todayISO().slice(0,8)+'01' },
+  quarter: { label:'Last 90 days',  from: () => fmtISO(addDays(new Date(),-90)) },
+  year:    { label:'This year',     from: () => todayISO().slice(0,4)+'-01-01' },
+  all:     { label:'All time',      from: () => '0000-01-01' }
+};
+
+/* Everything closed in the window, for one domain or all of them. Milestones are
+   not items, so they are gathered off their projects by the date they closed. */
+function bragData(rangeKey, domain){
+  const r = BRAG_RANGES[rangeKey] || BRAG_RANGES.month;
+  const from = r.from(), to = todayISO();
+  const inRange = d => !!d && d.slice(0,10) >= from && d.slice(0,10) <= to;
+  const inDomain = c => domain==='all' || c===domain;
+
+  const doneItems = completedItems().filter(i=>inRange(i.completedAt) && inDomain(i.category));
+  const projectsDone = doneItems.filter(i=>i.type==='project');
+  const tasksDone    = doneItems.filter(i=>i.type==='task');
+
+  /* Milestones closed in the window, grouped under the project they belong to.
+     A project reported as delivered is left out here — it is already the stronger
+     claim, and listing it again under "moved forward" reads as padding. */
+  const deliveredIds = new Set(projectsDone.map(p=>p.id));
+  const advanced = [];
+  projects().filter(p=>inDomain(p.category) && !deliveredIds.has(p.id)).forEach(p=>{
+    const closed = (p.subtasks||[]).filter(sx=>sx.done && inRange(sx.doneAt));
+    if(closed.length) advanced.push({ project:p, closed, st:projectStats(p) });
+  });
+  advanced.sort((a,b)=>b.closed.length-a.closed.length);
+
+  const weight = u => (EFFORT[u.effort]||EFFORT[DEFAULT_EFFORT]).weight;
+  // Steps inside a delivered project still count — they were done, they just are
+  // not listed separately because the delivery already covers them.
+  const deliveredSteps = projectsDone.reduce((a,p)=>
+    a + (p.subtasks||[]).filter(sx=>sx.done && inRange(sx.doneAt)).length, 0);
+  const deliveredPoints = projectsDone.reduce((a,p)=>
+    a + (p.subtasks||[]).filter(sx=>sx.done && inRange(sx.doneAt)).reduce((n,c)=>n+weight(c),0), 0);
+  const points = advanced.reduce((a,x)=>a + x.closed.reduce((n,c)=>n+weight(c),0), 0)
+               + tasksDone.reduce((a,t)=>a+weight(t),0) + deliveredPoints;
+
+  const recurring = tasksDone.filter(t=>t.seriesId);
+  const standalone = tasksDone.filter(t=>!t.seriesId && !t.projectId);
+  const projectTasks = tasksDone.filter(t=>!t.seriesId && t.projectId);
+  const people = Array.from(new Set(doneItems.map(i=>i.assignee).filter(Boolean)));
+
+  return { from, to, label:r.label, domain, projectsDone, tasksDone, advanced,
+           recurring, standalone, projectTasks, points, people,
+           milestoneCount: advanced.reduce((a,x)=>a+x.closed.length,0) + deliveredSteps };
+}
+
+function exportBragFile(rangeKey, domain){
+  const d = bragData(rangeKey, domain);
+  const scope = domain==='all' ? 'All areas' : domain;
+  const pretty = iso => new Date(iso+'T00:00:00').toLocaleDateString(undefined,{day:'numeric',month:'short',year:'numeric'});
+  const body = [];
+
+  body.push(DX.h1('What I delivered'));
+  body.push(DX.muted(`${scope}  ·  ${d.label}${rangeKey==='all'?'':`  ·  ${pretty(d.from)} to ${pretty(d.to)}`}`));
+
+  // The headline sentence, so the first line answers the question on its own.
+  const head = [];
+  if(d.projectsDone.length) head.push(`${d.projectsDone.length} project${d.projectsDone.length===1?'':'s'} completed`);
+  if(d.milestoneCount) head.push(`${d.milestoneCount} milestone${d.milestoneCount===1?'':'s'} closed`);
+  if(d.tasksDone.length) head.push(`${d.tasksDone.length} task${d.tasksDone.length===1?'':'s'} closed`);
+  body.push(DX.para([{text: head.length? head.join(', ') + '.' : 'Nothing was closed in this period.', b:true}], {spaceAfter:200}));
+
+  if(d.projectsDone.length){
+    body.push(DX.h2('Delivered end to end'));
+    d.projectsDone.forEach(p=>{
+      const st = projectStats(p);
+      const detail = st.hasPlan ? ` — ${st.total} steps, ${st.weightTotal} effort points` : '';
+      body.push(DX.bullet([{text:p.title, b:true}, {text:`${detail}. Closed ${pretty(p.completedAt.slice(0,10))}.`}]));
+    });
+    body.push(DX.spacer());
+  }
+
+  if(d.advanced.length){
+    body.push(DX.h2('Moved forward'));
+    d.advanced.forEach(x=>{
+      const at = x.st.hasPlan ? `now ${x.st.pct}% complete` : 'in progress';
+      body.push(DX.para([{text:x.project.title, b:true}, {text:`  —  ${x.closed.length} step${x.closed.length===1?'':'s'} closed, ${at}`}], {spaceAfter:40}));
+      x.closed.forEach(c=>body.push(DX.bullet([{text:c.title}])));
+    });
+    body.push(DX.spacer());
+  }
+
+  if(d.standalone.length || d.projectTasks.length){
+    body.push(DX.h2('Also closed'));
+    d.projectTasks.forEach(t=>{
+      const proj = byId(t.projectId);
+      body.push(DX.bullet([{text:t.title}, {text: proj? `  (${proj.title})`:'', color:'94A3B8'}]));
+    });
+    d.standalone.forEach(t=>body.push(DX.bullet([{text:t.title}])));
+    body.push(DX.spacer());
+  }
+
+  if(d.recurring.length){
+    body.push(DX.h2('Commitments kept'));
+    const byTitle = {};
+    d.recurring.forEach(t=>{ byTitle[t.title] = (byTitle[t.title]||0)+1; });
+    Object.keys(byTitle).sort().forEach(t=>
+      body.push(DX.bullet([{text:t}, {text:`  —  ${byTitle[t]}×`, color:'94A3B8'}])));
+    body.push(DX.spacer());
+  }
+
+  body.push(DX.h2('By the numbers'));
+  body.push(DX.table([
+    ['Projects completed', d.projectsDone.length],
+    ['Projects advanced', d.advanced.length],
+    ['Milestones closed', d.milestoneCount],
+    ['Tasks closed', d.tasksDone.length],
+    ['Effort points delivered', d.points],
+    ['Recurring commitments met', d.recurring.length]
+  ]));
+  if(d.people.length) body.push(DX.para([{text:'Worked with: ', b:true},{text:d.people.join(', ')}]));
+
+  body.push(DX.muted(`Generated ${new Date().toLocaleDateString(undefined,{day:'numeric',month:'long',year:'numeric'})} from Second Brain.`));
+
+  const slug = (domain==='all'?'all':domain).toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'');
+  downloadDocx(`brag-${slug}-${rangeKey}-${todayISO()}.docx`, body.join(''));
+  pushToast(`Brag file downloaded — ${d.label.toLowerCase()}`);
+}
+
+function downloadDocx(filename, bodyXml){
+  const doc = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+<w:body>${bodyXml}<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1134" w:right="1134" w:bottom="1134" w:left="1134"/></w:sectPr></w:body></w:document>`;
+  const numbering = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+<w:abstractNum w:abstractNumId="0"><w:lvl w:ilvl="0"><w:numFmt w:val="bullet"/><w:lvlText w:val="&#8226;"/>
+<w:pPr><w:ind w:left="360" w:hanging="360"/></w:pPr></w:lvl></w:abstractNum>
+<w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num></w:numbering>`;
+  const styles = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+<w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri"/><w:sz w:val="22"/></w:rPr></w:rPrDefault></w:docDefaults>
+<w:style w:type="table" w:styleId="TableGrid"><w:name w:val="Table Grid"/></w:style></w:styles>`;
+  const blob = zipStore([
+    { name:'[Content_Types].xml', text:`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+<Default Extension="xml" ContentType="application/xml"/>
+<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+<Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>
+<Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/>
+</Types>` },
+    { name:'_rels/.rels', text:`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+</Relationships>` },
+    { name:'word/_rels/document.xml.rels', text:`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering" Target="numbering.xml"/>
+</Relationships>` },
+    { name:'word/document.xml', text:doc },
+    { name:'word/styles.xml', text:styles },
+    { name:'word/numbering.xml', text:numbering }
+  ]);
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url), 2000);
+}
+
+/* =========================================================
    Lightweight DOCX-compatible export (no external library)
    ========================================================= */
 function downloadWordDoc(filename, title, bodyHtml){
@@ -4041,6 +4337,17 @@ function handleAction(action, el){
     }
     case 'project-health-filter': ui.projectHealthFilter = el.getAttribute('data-health'); render(); break;
     case 'export-portfolio': exportPortfolioReport(); break;
+    case 'brag-range': ui.bragRange = el.value; render(); break;
+    case 'brag-domain': ui.bragDomain = el.value; render(); break;
+    case 'export-brag': {
+      const doms = Array.from(new Set(completedItems().map(i=>i.category)))
+        .concat(projects().filter(p=>(p.subtasks||[]).some(sx=>sx.done)).map(p=>p.category))
+        .filter((v,i,a)=>a.indexOf(v)===i);
+      const dom = doms.indexOf(ui.bragDomain)>=0 ? ui.bragDomain
+        : (doms.find(n=>/intelmotion|intel group/i.test(n)) || 'all');
+      exportBragFile(ui.bragRange, dom);
+      break;
+    }
     case 'export-report': {
       const t = ui.reportsTab;
       if(t==='areas') exportAreasReport();
