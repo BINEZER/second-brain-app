@@ -219,6 +219,11 @@
          hover brings it back to full strength to say so. */
       .pin-btn.pinned{background:var(--c-surface-alt);border-color:var(--c-border);opacity:.4;filter:grayscale(1)}
       .pin-btn.pinned:hover{opacity:1;filter:none;border-color:var(--c-border-strong)}
+      .pick-row{display:flex;align-items:center;gap:10px;padding:9px 6px;border-bottom:1px solid var(--c-line,var(--c-border));
+        font-size:14px;cursor:pointer;border-radius:6px}
+      .pick-row:last-child{border-bottom:none}
+      .pick-row:hover{background:var(--c-surface-alt)}
+      .pick-row input{width:16px;height:16px;flex-shrink:0;accent-color:var(--c-focus);cursor:pointer}
       .drag-handle{width:26px;height:26px;border-radius:8px;border:1px solid transparent;background:transparent;
         color:var(--c-text-muted);font-size:14px;line-height:1;cursor:grab;touch-action:none;flex-shrink:0}
       .drag-handle:hover{background:var(--c-surface-alt);border-color:var(--c-border);color:var(--c-text-secondary)}
@@ -851,9 +856,11 @@ const ui = {
   projectFilter: 'all',     // life area filter for Projects view
   expandedProjects: new Set(),
   showArchived: false,
-  inboxAssigneeFilter: 'all', // assignee filter for Inbox view
-  inboxDate: 'all',           // all | overdue | today | week | nodate — due-date filter
-  inboxCategory: 'all',       // life-area filter for Inbox view
+  // Inbox filters. Each is a list of chosen values; empty means no restriction.
+  inboxAssignees: [],         // owner names
+  inboxDates: [],             // keys of INBOX_DATES
+  inboxCategories: [],        // life-area names
+  inboxProjects: [],          // project ids
   historyRange: 'month',      // month | 30d | all | custom — completed-tasks filter in Reports
   historyCustomFrom: null,
   historyCustomTo: null,
@@ -868,7 +875,6 @@ const ui = {
   reportsSearch: '',          // free-text filter on Reports > Projects
   inboxSearch: '',            // free-text filter on the Inbox
   inboxScope: 'all',          // all | unfiled | project | standalone — what the Inbox lists
-  inboxProject: 'all',        // narrow to one project's steps
   habitWeekOffset: 0,         // weeks back on the Habits tab, so a missed weekend is reachable
   showInactiveHabits: false,  // reveal retired habits
   importText: '',             // Settings > Import — raw pasted JSON
@@ -943,6 +949,13 @@ function moveTools(action, id, i, len, extra, owner){
 
 /* Move an element to an absolute index: remove, then insert. A swap would do for
    neighbours but not for a drag that crosses several rows. */
+/* Add or remove a value from a filter list, in place. */
+function toggleIn(arr, val){
+  const i = arr.indexOf(val);
+  if(i>=0) arr.splice(i,1); else arr.push(val);
+  return arr;
+}
+
 function moveInArrayTo(arr, from, to){
   if(from===to || from<0 || from>=arr.length || to<0 || to>=arr.length) return false;
   const [x] = arr.splice(from,1);
@@ -1984,11 +1997,14 @@ function inboxScoped(){
 /* Everything the Inbox is showing except the date filter. Kept separate so the
    date chips can count what each one would actually reveal, rather than counting
    against a list the date filter has already narrowed. */
+/* Each filter holds a list of chosen values; empty means "everything". Within a
+   filter the choices are OR'd — two domains means either — and the filters are
+   AND'd with each other, which is what "these domains, due this week" means. */
 function inboxBaseList(){
   let list = inboxScoped();
-  if(ui.inboxAssigneeFilter!=='all') list = list.filter(i=>i.assignee===ui.inboxAssigneeFilter);
-  if(ui.inboxProject!=='all') list = list.filter(i=>i.projectId===ui.inboxProject);
-  if(ui.inboxCategory!=='all') list = list.filter(i=>i.category===ui.inboxCategory);
+  if(ui.inboxAssignees.length) list = list.filter(i=>ui.inboxAssignees.indexOf(i.assignee)>=0);
+  if(ui.inboxProjects.length)  list = list.filter(i=>ui.inboxProjects.indexOf(i.projectId)>=0);
+  if(ui.inboxCategories.length)list = list.filter(i=>ui.inboxCategories.indexOf(i.category)>=0);
   if(ui.inboxSearch) list = list.filter(i=>matchesSearch(i.title, ui.inboxSearch)
     || matchesSearch(i.assignee, ui.inboxSearch)
     || matchesSearch(i.category, ui.inboxSearch)
@@ -1999,18 +2015,27 @@ function inboxBaseList(){
 /* Due-date buckets. "Next 7 days" includes today, so Today is a subset of it —
    they answer different questions and overlapping is the honest behaviour. */
 const INBOX_DATES = {
-  all:      { label:'Any date',    match: () => true },
   overdue:  { label:'Overdue',     match: it => !!it.dueDate && it.dueDate < todayISO() },
   today:    { label:'Today',       match: it => it.dueDate === todayISO() },
   week:     { label:'Next 7 days', match: it => !!it.dueDate && it.dueDate >= todayISO() && it.dueDate <= fmtISO(addDays(new Date(),7)) },
   nodate:   { label:'No date',     match: it => !it.dueDate }
 };
-function inboxDateKey(){ return INBOX_DATES[ui.inboxDate] ? ui.inboxDate : 'all'; }
+function inboxAnyFilter(){
+  return !!(ui.inboxCategories.length || ui.inboxProjects.length || ui.inboxDates.length || ui.inboxAssignees.length);
+}
+/* A label for a multi-select button: the value itself when one is chosen, a count
+   when several, so the button says what it is doing without growing with the list. */
+function pickLabel(chosen, none, noun, nameOf){
+  if(!chosen.length) return none;
+  if(chosen.length===1) return nameOf ? nameOf(chosen[0]) : chosen[0];
+  return `${chosen.length} ${noun}`;
+}
 
 function inboxViewList(){
   let list = inboxBaseList();
-  const key = inboxDateKey();
-  if(key!=='all') list = list.filter(INBOX_DATES[key].match);
+  // Buckets overlap on purpose (Today is inside Next 7 days), so selecting both
+  // must not list anything twice — matching any chosen bucket is enough.
+  if(ui.inboxDates.length) list = list.filter(it=>ui.inboxDates.some(k=>INBOX_DATES[k] && INBOX_DATES[k].match(it)));
   // Anything without a domain sorts first — that is the work the Inbox is for.
   // A stable partition, so manual ordering inside each half is preserved.
   const needsDomain = list.filter(i=>i.category==='Inbox');
@@ -2025,7 +2050,8 @@ function renderInboxView(){
   // a picker that offers empty choices is just a longer list to read.
   const domCounts = {};
   inboxScoped().forEach(i=>{ domCounts[i.category] = (domCounts[i.category]||0)+1; });
-  if(ui.inboxCategory!=='all' && !domCounts[ui.inboxCategory]) domCounts[ui.inboxCategory] = 0;
+  // A chosen domain stays listed even at zero, so a choice never vanishes from its own picker.
+  ui.inboxCategories.forEach(c=>{ if(domCounts[c]==null) domCounts[c]=0; });
   const inboxDomains = Object.keys(domCounts).sort((a,b)=>a==='Inbox'?-1:b==='Inbox'?1:a.localeCompare(b)).map(k=>[k,domCounts[k]]);
   const projList = projects();
   const assignees = Array.from(new Set(allOpenTasks().filter(i=>i.assignee).map(i=>i.assignee))).sort();
@@ -2049,32 +2075,27 @@ function renderInboxView(){
     <div class="filter-bar">
       ${searchBox('inbox-search', ui.inboxSearch, 'Search tasks, projects, domains, owners…')}
       ${ui.inboxSearch? `<button class="btn btn-sm" data-action="clear-inbox-search">Clear</button>`:''}
-      ${inboxDomains.length? `<select data-action-change="inbox-category" style="font-size:13px;padding:7px 9px;border-radius:10px;border:1px solid var(--c-border);background:var(--c-surface);color:var(--c-text)">
-        <option value="all" ${ui.inboxCategory==='all'?'selected':''}>Any domain</option>
-        ${inboxDomains.map(([name,n])=>`<option value="${esc(name)}" ${ui.inboxCategory===name?'selected':''}>${esc(name)} (${n})</option>`).join('')}
-      </select>`:''}
-      ${projList.length? `<select data-action-change="inbox-project" style="font-size:13px;padding:7px 9px;border-radius:10px;border:1px solid var(--c-border);background:var(--c-surface);color:var(--c-text)">
-        <option value="all" ${ui.inboxProject==='all'?'selected':''}>Any project</option>
-        ${projList.map(pr=>`<option value="${esc(pr.id)}" ${ui.inboxProject===pr.id?'selected':''}>${esc(pr.title)}</option>`).join('')}
-      </select>`:''}
-      ${(ui.inboxCategory!=='all'||ui.inboxProject!=='all'||inboxDateKey()!=='all'||ui.inboxAssigneeFilter!=='all')
-        ? `<button class="btn btn-sm btn-ghost" data-action="clear-inbox-filters">Clear filters</button>` : ''}
+      ${inboxDomains.length? `<button class="btn btn-sm ${ui.inboxCategories.length?'btn-primary':''}" data-action="pick-domains">${esc(pickLabel(ui.inboxCategories,'Any domain','domains'))} ▾</button>`:''}
+      ${projList.length? `<button class="btn btn-sm ${ui.inboxProjects.length?'btn-primary':''}" data-action="pick-projects">${esc(pickLabel(ui.inboxProjects,'Any project','projects', id=>(byId(id)||{title:'?'}).title))} ▾</button>`:''}
+      ${inboxAnyFilter()? `<button class="btn btn-sm btn-ghost" data-action="clear-inbox-filters">Clear filters</button>` : ''}
     </div>
     <div class="chip-row">
+      <button class="chip ${ui.inboxDates.length?'':'on'}" data-action="inbox-date" data-date="">Any date (${dateBase.length})</button>
       ${Object.keys(INBOX_DATES).map(k=>{
-        const n = k==='all' ? dateBase.length : dateBase.filter(INBOX_DATES[k].match).length;
-        const danger = k==='overdue' && n;
-        return `<button class="chip ${inboxDateKey()===k?'on':''}" data-action="inbox-date" data-date="${k}"${danger?' style="color:var(--c-danger);font-weight:700"':''}>${INBOX_DATES[k].label} (${n})</button>`;
+        const n = dateBase.filter(INBOX_DATES[k].match).length;
+        const on = ui.inboxDates.indexOf(k)>=0;
+        const danger = k==='overdue' && n && !on;
+        return `<button class="chip ${on?'on':''}" data-action="inbox-date" data-date="${k}"${danger?' style="color:var(--c-danger);font-weight:700"':''}>${INBOX_DATES[k].label} (${n})</button>`;
       }).join('')}
     </div>
     ${assignees.length? `<div class="chip-row">
-      <button class="chip ${ui.inboxAssigneeFilter==='all'?'on':''}" data-action="filter-assignee" data-assignee="all">All</button>
-      ${assignees.map(a=>`<button class="chip ${ui.inboxAssigneeFilter===a?'on':''}" data-action="filter-assignee" data-assignee="${esc(a)}">👤 ${esc(a)}</button>`).join('')}
+      <button class="chip ${ui.inboxAssignees.length?'':'on'}" data-action="filter-assignee" data-assignee="">Anyone</button>
+      ${assignees.map(a=>`<button class="chip ${ui.inboxAssignees.indexOf(a)>=0?'on':''}" data-action="filter-assignee" data-assignee="${esc(a)}">👤 ${esc(a)}</button>`).join('')}
     </div>` : ''}
     ${(inboxViewLen = list.length, '')}
     ${list.length? list.map((it,i)=>renderInboxRow(it,i)).join('')
       : `<div class="empty">${ui.inboxSearch? 'Nothing matches that search.'
-          : (inboxDateKey()!=='all' || ui.inboxCategory!=='all')? `Nothing matches these filters. <button class="btn btn-sm" data-action="clear-inbox-filters" style="margin-left:8px">Clear filters</button>`
+          : inboxAnyFilter()? `Nothing matches these filters. <button class="btn btn-sm" data-action="clear-inbox-filters" style="margin-left:8px">Clear filters</button>`
           : ui.inboxScope==='unfiled'? 'Inbox zero 🎉 — nothing waiting to be triaged.'
           : 'Nothing here yet.'}</div>`}
   </div>`;
@@ -3248,6 +3269,41 @@ function modalNewProject(){
   setTimeout(()=>qs('#np-title')&&qs('#np-title').focus(),0);
 }
 
+/* A checkbox list for a filter with more options than a chip row can carry —
+   seventeen domains as seventeen chips is a wall, not a control. Ticking applies
+   at once so the list behind it updates as you go; there is no Save to forget. */
+function modalMultiPick(kind){
+  const spec = kind==='domains'
+    ? { title:'Filter by domain', chosen:ui.inboxCategories, action:'toggle-domain',
+        options: Array.from(new Set(inboxScoped().map(i=>i.category).concat(ui.inboxCategories)))
+          .sort((a,b)=>a==='Inbox'?-1:b==='Inbox'?1:a.localeCompare(b))
+          .map(n=>[n, n, inboxScoped().filter(i=>i.category===n).length]) }
+    : { title:'Filter by project', chosen:ui.inboxProjects, action:'toggle-project',
+        options: projects().filter(p=>inactiveProjects.indexOf(p.id)===-1)
+          .map(p=>[p.id, p.title, inboxScoped().filter(i=>i.projectId===p.id).length])
+          .filter(o=>o[2] > 0 || spec0Chosen(kind, o[0])) };
+  openModal(`
+    <h3>${spec.title}</h3>
+    <div class="view-sub" style="margin-bottom:12px">Tick as many as you like — anything you tick is included. Tick none to see everything.</div>
+    <div style="max-height:46vh;overflow-y:auto;margin-bottom:6px">
+      ${spec.options.length? spec.options.map(([val,label,n])=>{
+        const on = spec.chosen.indexOf(val)>=0;
+        return `<label class="pick-row"><input type="checkbox" ${on?'checked':''} data-action="${spec.action}" data-val="${esc(val)}"/>
+          <span style="flex:1;min-width:0">${esc(label)}</span>
+          <span style="font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--c-text-muted)">${n}</span></label>`;
+      }).join('') : '<div class="view-sub">Nothing to filter by yet.</div>'}
+    </div>
+    <div class="modal-actions">
+      ${spec.chosen.length? `<button class="btn" data-action="clear-pick" data-kind="${kind}">Clear ${spec.chosen.length}</button>`:''}
+      <button class="btn btn-primary" data-action="close-modal">Done</button>
+    </div>`);
+}
+/* A chosen project with nothing left in scope stays listed, so a choice never
+   disappears from the picker that set it. */
+function spec0Chosen(kind, val){
+  return (kind==='domains' ? ui.inboxCategories : ui.inboxProjects).indexOf(val) >= 0;
+}
+
 function modalFollowup(existing, presetName){
   const areas = state.state.lifeAreas;
   const f = existing || {};
@@ -4318,7 +4374,12 @@ function handleAction(action, el){
       render(); break;
     }
     case 'filter-project': ui.projectFilter = el.getAttribute('data-cat'); render(); break;
-    case 'filter-assignee': ui.inboxAssigneeFilter = el.getAttribute('data-assignee'); render(); break;
+    case 'filter-assignee': {
+      const a = el.getAttribute('data-assignee');
+      if(!a) ui.inboxAssignees = [];                 // "Anyone" clears the whole filter
+      else toggleIn(ui.inboxAssignees, a);
+      render(); break;
+    }
     case 'reports-tab': ui.reportsTab = el.getAttribute('data-tab'); render(); break;
     case 'review-tab': ui.reviewTab = el.getAttribute('data-tab'); render(); break;
     case 'review-tick': {
@@ -4389,7 +4450,7 @@ function handleAction(action, el){
     case 'goto-inbox': {
       closeModal();
       const it2 = byId(id);
-      ui.view='inbox'; ui.inboxSearch=''; ui.inboxAssigneeFilter='all';
+      ui.view='inbox'; ui.inboxSearch=''; ui.inboxAssignees=[];
       ui.inboxScope = (it2 && it2.category==='Inbox') ? 'unfiled' : 'all';
       render();
       break;
@@ -4457,12 +4518,25 @@ function handleAction(action, el){
     case 'inbox-search-changed': ui.inboxSearch = el.value; render(); break;
     case 'clear-inbox-search': ui.inboxSearch=''; render(); break;
     case 'inbox-scope': ui.inboxScope = el.getAttribute('data-scope'); render(); break;
-    case 'inbox-date': ui.inboxDate = el.getAttribute('data-date'); render(); break;
-    case 'inbox-category': ui.inboxCategory = el.value; render(); break;
-    case 'clear-inbox-filters':
-      ui.inboxCategory='all'; ui.inboxProject='all'; ui.inboxDate='all'; ui.inboxAssigneeFilter='all';
+    case 'inbox-date': {
+      const k = el.getAttribute('data-date');
+      if(!k) ui.inboxDates = [];                     // "Any date" clears the whole filter
+      else toggleIn(ui.inboxDates, k);
       render(); break;
-    case 'inbox-project': ui.inboxProject = el.value; render(); break;
+    }
+    case 'pick-domains': modalMultiPick('domains'); break;
+    case 'pick-projects': modalMultiPick('projects'); break;
+    case 'toggle-domain': toggleIn(ui.inboxCategories, el.getAttribute('data-val')); render(); modalMultiPick('domains'); break;
+    case 'toggle-project': toggleIn(ui.inboxProjects, el.getAttribute('data-val')); render(); modalMultiPick('projects'); break;
+    case 'clear-pick': {
+      const k = el.getAttribute('data-kind');
+      if(k==='domains') ui.inboxCategories = []; else ui.inboxProjects = [];
+      render(); modalMultiPick(k); break;
+    }
+    case 'clear-inbox-filters':
+      ui.inboxCategories=[]; ui.inboxProjects=[]; ui.inboxDates=[]; ui.inboxAssignees=[];
+      render(); break;
+
     case 'move-now': case 'move-inbox': case 'move-project': case 'move-subtask':
     case 'move-child': case 'move-habit': case 'move-recurrence': case 'move-review': {
       const from = +el.getAttribute('data-i');
@@ -4804,8 +4878,8 @@ function handleAction(action, el){
     /* Jump between a person and their work in both directions. */
     case 'view-person-tasks': {
       ui.view='inbox'; ui.processInbox=false; ui.inboxScope='all';
-      ui.inboxAssigneeFilter = el.getAttribute('data-person');
-      ui.inboxSearch=''; ui.inboxProject='all';
+      ui.inboxAssignees = [el.getAttribute('data-person')];
+      ui.inboxSearch=''; ui.inboxProjects=[]; ui.inboxCategories=[]; ui.inboxDates=[];
       render();
       break;
     }
