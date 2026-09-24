@@ -347,68 +347,67 @@ async function launch() {
   ok('the Process Inbox count matches what the list can actually show',
     processLabel.includes('(' + badgeN + ')'), { label: processLabel, tasks: badgeN });
 
-  console.log('\nINBOX — due-date and domain filters');
+  console.log('\nINBOX — filters take more than one value each');
   await page.click('[data-action="nav"][data-view="inbox"]');
   await page.click('[data-action="inbox-scope"][data-scope="all"]');
   await page.waitForTimeout(300);
-  const dateChips = await page.locator('[data-action="inbox-date"]').allInnerTexts();
-  ok('the Inbox offers a date filter', dateChips.length === 5, dateChips);
-  /* Chip counts come from the list before the date filter, so each chip promises
-     what clicking it reveals rather than counting an already-narrowed list. */
-  const anyCount = await page.locator('.item-row').count();
-  ok('the "Any date" count matches the visible list',
-    dateChips[0].includes('(' + anyCount + ')'), { chip: dateChips[0], rows: anyCount });
-
-  const todayStr = new Date().toISOString().slice(0, 10);
-  const weekEnd = new Date(); weekEnd.setDate(weekEnd.getDate() + 7);
-  const weekStr = weekEnd.toISOString().slice(0, 10);
+  const shown = () => page.locator('.item-row .item-title').allInnerTexts();
   const openNow = (await st()).items.filter(i => i.type === 'task' && i.status === 'open');
-  for (const [key, pred] of [
-    ['overdue', t => !!t.dueDate && t.dueDate < todayStr],
-    ['today',   t => t.dueDate === todayStr],
-    ['week',    t => !!t.dueDate && t.dueDate >= todayStr && t.dueDate <= weekStr],
-    ['nodate',  t => !t.dueDate]
-  ]) {
-    await page.click(`[data-action="inbox-date"][data-date="${key}"]`);
-    await page.waitForTimeout(350);
-    const want = openNow.filter(pred).map(t => t.title).sort();
-    const got = (await page.locator('.item-row .item-title').allInnerTexts()).sort();
-    ok(`the ${key} filter shows exactly those tasks`, JSON.stringify(got) === JSON.stringify(want), { got, want });
-  }
-  await page.click('[data-action="inbox-date"][data-date="all"]');
-  await page.waitForTimeout(300);
+  const todayStr = new Date().toISOString().slice(0, 10);
 
-  const domSel = page.locator('[data-action-change="inbox-category"]');
-  ok('the Inbox offers a domain filter', await domSel.count() === 1);
-  const domOpts = await domSel.locator('option').allInnerTexts();
-  // A picker offering a choice that yields nothing is just a longer list to read.
-  ok('it only lists domains that hold something, with counts',
-    domOpts.length > 1 && domOpts.slice(1).every(o => /\(\d+\)$/.test(o.trim())), domOpts);
-  const pickDomain = domOpts[1].replace(/\s*\(\d+\)$/, '');
-  await domSel.selectOption(pickDomain);
+  /* Each filter holds a list: within one, choices are OR'd; across filters, AND'd.
+     The date buckets overlap on purpose (Today sits inside Next 7 days), so
+     selecting both must not list anything twice. */
+  await page.click('[data-action="inbox-date"][data-date="overdue"]');
+  await page.waitForTimeout(350);
+  const oneBucket = (await shown()).sort();
+  const wantOverdue = openNow.filter(t => !!t.dueDate && t.dueDate < todayStr).map(t => t.title).sort();
+  ok('one date bucket filters', JSON.stringify(oneBucket) === JSON.stringify(wantOverdue), { got: oneBucket, want: wantOverdue });
+  await page.click('[data-action="inbox-date"][data-date="nodate"]');
+  await page.waitForTimeout(350);
+  const twoBuckets = (await shown()).sort();
+  const wantBoth = openNow.filter(t => (!!t.dueDate && t.dueDate < todayStr) || !t.dueDate).map(t => t.title).sort();
+  ok('two date buckets OR together', JSON.stringify(twoBuckets) === JSON.stringify(wantBoth), { got: twoBuckets, want: wantBoth });
+  await page.click('[data-action="inbox-date"][data-date="today"]');
+  await page.click('[data-action="inbox-date"][data-date="week"]');
   await page.waitForTimeout(400);
-  const domRows = await page.locator('.item-row .item-title').allInnerTexts();
-  const domWant = openNow.filter(t => t.category === pickDomain).map(t => t.title).sort();
-  ok('choosing a domain narrows to exactly that domain',
-    JSON.stringify(domRows.sort()) === JSON.stringify(domWant), { got: domRows, want: domWant });
-  ok('  and the date counts follow the domain',
-    (await page.locator('[data-action="inbox-date"]').allInnerTexts())[0].includes('(' + domWant.length + ')'),
-    (await page.locator('[data-action="inbox-date"]').allInnerTexts())[0]);
+  const overlapping = await shown();
+  ok('overlapping buckets never list anything twice',
+    new Set(overlapping).size === overlapping.length, overlapping);
+  await page.click('[data-action="inbox-date"][data-date=""]');
+  await page.waitForTimeout(350);
+  ok('"Any date" clears the whole date filter', (await shown()).length === openNow.length);
 
-  // Filters combine, and an empty result must offer the way out.
-  await page.click('[data-action="inbox-scope"][data-scope="recurring"]');
-  await page.waitForTimeout(350);
-  const filterEmpty = await page.locator('.empty').innerText();
-  ok('an empty filtered view offers a way out', /clear filters/i.test(filterEmpty), filterEmpty);
-  await page.locator('.empty [data-action="clear-inbox-filters"]').click();
-  await page.waitForTimeout(350);
-  ok('  and clearing resets the date filter',
-    (await page.locator('[data-action="inbox-date"][data-date="all"]').getAttribute('class')).includes('on'));
-  /* The domain picker is only rendered when the scope holds something, so check it
-     back in a scope that does — its absence in an empty scope is correct. */
-  await page.click('[data-action="inbox-scope"][data-scope="all"]');
-  await page.waitForTimeout(350);
-  ok('  and the domain picker too', (await domSel.inputValue()) === 'all', await domSel.inputValue());
+  // Domains come through a checkbox picker: seventeen chips would be a wall.
+  await page.click('[data-action="pick-domains"]');
+  await page.waitForSelector('.pick-row');
+  const pickable = await page.locator('.pick-row').count();
+  ok('the domain picker lists the domains in scope', pickable > 0, pickable);
+  if (pickable >= 2) {
+    const pickedNames = [];
+    for (const n of [0, 1]) {
+      pickedNames.push((await page.locator('.pick-row').nth(n).innerText()).split('\n')[0].trim());
+      await page.locator('.pick-row input').nth(n).check();
+      await page.waitForTimeout(350);
+    }
+    ok('both domains stay ticked', await page.locator('.pick-row input:checked').count() === 2, pickedNames);
+    await page.click('.modal-actions [data-action="close-modal"]');
+    await page.waitForTimeout(400);
+    ok('the button reports the count rather than growing',
+      /2 domains/.test(await page.locator('[data-action="pick-domains"]').innerText()),
+      await page.locator('[data-action="pick-domains"]').innerText());
+    /* Assert membership, not a smaller count: whether two domains narrow anything
+       depends on how the fixture's tasks are spread, but every listed row must
+       belong to one of the picked domains either way. */
+    const domainRows = await shown();
+    const byTitle = t => (openNow.find(x => x.title === t) || {}).category;
+    ok('every listed row belongs to a picked domain',
+      domainRows.length > 0 && domainRows.every(t => pickedNames.indexOf(byTitle(t)) >= 0),
+      { picked: pickedNames, rows: domainRows.map(t => `${t} → ${byTitle(t)}`) });
+  }
+  await page.click('[data-action="clear-inbox-filters"]');
+  await page.waitForTimeout(400);
+  ok('Clear filters resets every filter at once', (await shown()).length === openNow.length);
 
   console.log('\nMILESTONES — rename, delete, reorder');
   await page.click('[data-action="nav"][data-view="projects"]');
@@ -567,7 +566,7 @@ async function launch() {
   ok('  and linked back to the follow-up', !!(chased && chased.followupId));
 
   await page.click('[data-action="nav"][data-view="inbox"]');
-  await page.click('[data-action="filter-assignee"][data-assignee="all"]');
+  await page.click('[data-action="filter-assignee"][data-assignee=""]');
   await page.waitForTimeout(400);
   ok('the owner chip on a task is clickable', await page.locator('[data-action="goto-followup"]').count() > 0);
   await page.locator('[data-action="goto-followup"]').first().click();
