@@ -232,5 +232,99 @@ ok('today stamp names today', renderTodayStamp().includes(new Date().toLocaleDat
 ok('today stamp has the date', renderTodayStamp().includes(new Date().toLocaleDateString(undefined,{day:'numeric',month:'long',year:'numeric'})));
 try { ok('Now view renders with the stamp', renderNowView().includes('today-stamp')); } catch(e){ ok('Now view renders',false,e.message); }
 
+/* ---------- 8. periods: the windows, the numbers, the comparison ----------
+   Reports > Compare puts two periods side by side, and the brag file reports one
+   of them. Both go through periodStats, so these assertions cover both. */
+reset();
+const W0 = periodWindow('month', 0), W1 = periodWindow('month', -1);
+eq('this month starts on the 1st', W0.from.slice(8), '01');
+eq('last month ends the day before this one starts', fmtISO(addDays(new Date(W1.to+'T00:00:00'),1)), W0.from);
+eq('this month is the one running now', W0.to >= todayISO() && W0.from <= todayISO(), true);
+ok('a month window is 28 to 31 days', dayCount(W0.from,W0.to)>=28 && dayCount(W0.from,W0.to)<=31, dayCount(W0.from,W0.to));
+
+const K0 = periodWindow('week', 0);
+eq('a week window is 7 days', dayCount(K0.from,K0.to), 7);
+eq('the week starts on a Monday', new Date(K0.from+'T00:00:00').getDay(), 1);
+eq('last week ends the day before this one', fmtISO(addDays(new Date(periodWindow('week',-1).to+'T00:00:00'),1)), K0.from);
+
+const Y1 = periodWindow('year', -1);
+eq('last year runs Jan to Dec', Y1.from+'|'+Y1.to, (new Date().getFullYear()-1)+'-01-01|'+(new Date().getFullYear()-1)+'-12-31');
+eq('this year is labelled by its number', periodWindow('year',0).label, String(new Date().getFullYear()));
+eq('offset 0 reads as "this month"', periodRel('month',0), 'this month');
+eq('offset -1 reads as "last month"', periodRel('month',-1), 'last month');
+
+// Everything below lands inside last month, which is fully in the past.
+const prev = periodWindow('month', -1);
+const inPrev = h => prev.from + 'T' + h + ':00:00.000Z';
+reset();
+const pAdv = mkProject({title:'Advanced', category:'Operations'});
+pAdv.subtasks = [{id:'s1', title:'step', done:true, effort:'L', doneAt: inPrev('09')},
+                 {id:'s2', title:'open', done:false, effort:'S', doneAt:null}];
+newItem({type:'task', title:'T', category:'Operations', effort:'M', status:'done', completedAt: inPrev('09')});
+let ps = periodStats(prev.from, prev.to, 'all');
+eq('a project with a closed step counts as advanced', ps.advanced.length, 1);
+eq('its closed step counts as a milestone', ps.milestoneCount, 1);
+eq('the closed task counts', ps.tasksDone.length, 1);
+eq('effort points are L + M', ps.points, 5);
+eq('the area breakdown carries the same points', ps.byArea[0].points, 5);
+eq('a finished period is not still running', ps.running, false);
+eq('a finished period has fully elapsed', ps.daysElapsed, ps.daysTotal);
+
+// A delivered project is reported once, as delivered — never also as "advanced".
+const pDone = mkProject({title:'Delivered', category:'Operations', status:'done', completedAt: inPrev('11')});
+pDone.subtasks = [{id:'x', title:'s', done:true, effort:'S', doneAt: inPrev('10')}];
+ps = periodStats(prev.from, prev.to, 'all');
+eq('the delivered project is counted', ps.projectsDone.length, 1);
+eq('and is not listed again as advanced', ps.advanced.length, 1);
+eq('its steps still count as milestones', ps.milestoneCount, 2);
+eq('and their effort still counts', ps.points, 6);
+
+// Out-of-window work never leaks in, in either direction.
+newItem({type:'task', title:'Today', category:'Operations', effort:'XL', status:'done', completedAt:new Date().toISOString()});
+eq('work closed outside the window is ignored', periodStats(prev.from, prev.to, 'all').points, 6);
+ok('and shows up in the window it belongs to', periodStats(W0.from, W0.to, 'all').points >= 5);
+eq('the domain filter excludes other areas', periodStats(prev.from, prev.to, 'Health').points, 0);
+eq('and keeps its own', periodStats(prev.from, prev.to, 'Operations').points, 6);
+
+// The brag file is the same machinery, so the two can never disagree.
+eq('brag file agrees with periodStats for this month',
+   bragData('month','all').points, periodStats(W0.from, todayISO(), 'all').points);
+
+/* Habit consistency over an explicit window, which is what makes one month
+   comparable with another. */
+(function(){
+  const day = n => prev.from.slice(0,8) + String(n).padStart(2,'0');
+  const log = {}; [1,8,15,22].forEach(n=>log[day(n)] = true);
+  __getState().state.habits = [
+    { id:'hw', name:'Weekly review', emoji:'x', category:'Operations', active:true,
+      frequency:{type:'weekly', target:1}, log },
+    { id:'hd', name:'Daily walk', emoji:'x', category:'Home', active:true,
+      frequency:{type:'daily'}, log:{} },
+    { id:'hr', name:'Retired', emoji:'x', category:'Home', active:false,
+      frequency:{type:'daily'}, log:{} }
+  ];
+  const wk = habitConsistencyBetween(__getState().state.habits[0], prev.from, prev.to);
+  ok('four weekly ticks in a month read as near-perfect', wk>=90 && wk<=100, wk);
+  eq('an empty daily habit reads as 0%', habitConsistencyBetween(__getState().state.habits[1], prev.from, prev.to), 0);
+  eq('a window that has not started yet has no score',
+     habitConsistencyBetween(__getState().state.habits[0], periodWindow('month',1).from, periodWindow('month',1).to), null);
+  eq('the 30-day figure is just the window ending today',
+     habitConsistency(__getState().state.habits[0], 30),
+     habitConsistencyBetween(__getState().state.habits[0], fmtISO(addDays(new Date(),-29)), todayISO()));
+
+  const hs = periodHabits(prev.from, prev.to, 'all');
+  eq('retired habits stay out of the comparison', hs.length, 2);
+  eq('the domain filter narrows habits too', periodHabits(prev.from, prev.to, 'Home').length, 1);
+  eq('the average is over the scored habits', periodHabitAvg(hs), Math.round((wk+0)/2));
+  eq('a period with nothing to score averages to nothing', periodHabitAvg([{habit:null, pct:null}]), null);
+})();
+
+// The view and its export both render without throwing on real data.
+__in('ui').reportsTab = 'compare';
+try { ok('the Compare tab renders', renderReportsView().includes('Compare two periods')); }
+catch(e){ ok('the Compare tab renders', false, e.message); }
+ok('  and names both periods', renderReportsCompareView().includes(periodWindow('month',-1).label));
+__in('ui').reportsTab = 'areas';
+
 console.log(`analytics: ${passes} passed, ${fails} failed`);
 process.exit(fails?1:0);

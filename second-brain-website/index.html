@@ -865,7 +865,11 @@ const ui = {
   historyCustomFrom: null,
   historyCustomTo: null,
   historyWeekOffset: 0,       // weeks back from current, for the Reports habit-history pager
-  reportsTab: 'areas',        // areas | projects | habits | timeline
+  reportsTab: 'areas',        // areas | projects | habits | compare | timeline
+  compareGran: 'month',       // week | month | year — granularity of Reports > Compare
+  compareBase: -1,            // period offset on the left (0 = the one running now)
+  compareVs: 0,               // period offset on the right
+  compareDomain: null,        // null = all areas
   recurringFilter: 'all',     // all | tasks | chores — Recurring view
   bragRange: 'month',         // week | month | quarter | year | all — brag file period
   bragDomain: null,           // null = pick the day-job domain automatically
@@ -2470,23 +2474,37 @@ function inHistoryRange(it){
    habits while the views did not, so the app disagreed with itself. */
 function activeHabits(){ return state.state.habits.filter(h=>h.active!==false); }
 
-function habitConsistency(habit, days){
-  days = days||30;
+/* Consistency across an explicit window. Comparing one month with another needs
+   this shape; the familiar "last 30 days" is just the window that ends today.
+   A window running past today is clamped to today, so days you have not lived
+   yet are never counted as days you missed. Returns null for a window that has
+   not started, which reads as "—" rather than a misleading 0%. */
+function habitConsistencyBetween(habit, from, to){
+  const today = todayISO();
+  const end = to > today ? today : to;
+  if(end < from) return null;
+  const span = Math.round((new Date(end+'T00:00:00') - new Date(from+'T00:00:00'))/86400000) + 1;
   const f = habit.frequency || {type:'daily'};
   if(f.type==='weekly' || f.type==='monthly'){
     const target = f.target||1;
-    let done=0, cursor=new Date();
-    for(let i=0;i<days;i++){ if(habit.log[fmtISO(cursor)]) done++; cursor=addDays(cursor,-1); }
-    const expected = target * (days / (f.type==='monthly' ? 30.44 : 7));
+    let done=0, cursor=new Date(end+'T00:00:00');
+    for(let i=0;i<span;i++){ if(habit.log[fmtISO(cursor)]) done++; cursor=addDays(cursor,-1); }
+    const expected = target * (span / (f.type==='monthly' ? 30.44 : 7));
     return expected>0 ? Math.min(100, Math.round(done/expected*100)) : 0;
   }
-  let done=0, required=0, cursor=new Date();
-  for(let i=0;i<days;i++){
+  let done=0, required=0, cursor=new Date(end+'T00:00:00');
+  for(let i=0;i<span;i++){
     const key=fmtISO(cursor);
     if(isHabitRequiredOn(habit,key)){ required++; if(habit.log[key]) done++; }
     cursor=addDays(cursor,-1);
   }
   return required? Math.round(done/required*100) : 0;
+}
+
+function habitConsistency(habit, days){
+  days = days||30;
+  const pct = habitConsistencyBetween(habit, fmtISO(addDays(new Date(), -(days-1))), todayISO());
+  return pct===null ? 0 : pct;
 }
 
 /* =========================================================
@@ -2698,15 +2716,16 @@ function renderReportsView(){
   return `<div class="view">
     <div class="view-head">
       <div><div class="view-title">Reports</div><div class="view-sub">Progress by life area, project, and habit — plus a full completed-tasks timeline.</div></div>
-      <button class="btn" data-action="export-report">⇩ Export ${tab==='projects'?'portfolio':tab==='areas'?'life areas':tab==='habits'?'habits':'completed work'}</button>
+      <button class="btn" data-action="export-report">⇩ Export ${tab==='projects'?'portfolio':tab==='areas'?'life areas':tab==='habits'?'habits':tab==='compare'?'comparison':'completed work'}</button>
     </div>
     <div class="chip-row">
       <button class="chip ${tab==='areas'?'on':''}" data-action="reports-tab" data-tab="areas">Life Areas</button>
       <button class="chip ${tab==='projects'?'on':''}" data-action="reports-tab" data-tab="projects">Projects</button>
       <button class="chip ${tab==='habits'?'on':''}" data-action="reports-tab" data-tab="habits">Habits</button>
+      <button class="chip ${tab==='compare'?'on':''}" data-action="reports-tab" data-tab="compare">Compare</button>
       <button class="chip ${tab==='timeline'?'on':''}" data-action="reports-tab" data-tab="timeline">Timeline</button>
     </div>
-    ${tab==='projects'? renderReportsProjectsView() : tab==='habits'? renderReportsHabitsView() : tab==='timeline'? renderReportsTimelineView() : renderReportsAreasView()}
+    ${tab==='projects'? renderReportsProjectsView() : tab==='habits'? renderReportsHabitsView() : tab==='compare'? renderReportsCompareView() : tab==='timeline'? renderReportsTimelineView() : renderReportsAreasView()}
   </div>`;
 }
 
@@ -2850,14 +2869,166 @@ function renderHabitReportRow(h){
   </div>`;
 }
 
+/* Domains that actually hold completed work, so a picker never offers a dead choice. */
+function doneDomains(){
+  return Array.from(new Set(completedItems().map(i=>i.category)))
+    .concat(projects().filter(p=>(p.subtasks||[]).some(sx=>sx.done)).map(p=>p.category))
+    .filter(Boolean).filter((v,i,a)=>a.indexOf(v)===i).sort();
+}
+/* The comparison also reports habits, so areas that only hold habits belong here. */
+function compareDomains(){
+  return doneDomains().concat(activeHabits().map(h=>h.category))
+    .filter(Boolean).filter((v,i,a)=>a.indexOf(v)===i).sort();
+}
+
+/* =========================================================
+   Reports > Compare — two periods, side by side
+   One granularity and two offsets, so "this month against last month" and
+   "2026 against 2025" are the same screen rather than two features.
+   ========================================================= */
+function compareDelta(a, b, suffix){
+  if(a===null || b===null) return `<td class="num" style="color:var(--c-text-muted)">—</td>`;
+  const d = b - a;
+  if(!d) return `<td class="num" style="color:var(--c-text-muted)">same</td>`;
+  const col = d>0 ? 'var(--c-good)' : 'var(--c-danger)';
+  return `<td class="num" style="color:${col};font-weight:700">${d>0?'+':'−'}${Math.abs(d)}${suffix||''}</td>`;
+}
+function compareRow(label, a, b, suffix){
+  const cell = v => v===null ? '—' : v + (suffix||'');
+  return `<tr><td>${label}</td><td class="num">${cell(a)}</td><td class="num">${cell(b)}</td>${compareDelta(a,b,suffix)}</tr>`;
+}
+
+function renderReportsCompareView(){
+  const gran = PERIODS[ui.compareGran] ? ui.compareGran : 'month';
+  const doms = compareDomains();
+  const domain = doms.indexOf(ui.compareDomain)>=0 ? ui.compareDomain : 'all';
+  const base = periodWindow(gran, ui.compareBase);
+  const vs   = periodWindow(gran, ui.compareVs);
+  const A = periodStats(base.from, base.to, domain);
+  const B = periodStats(vs.from, vs.to, domain);
+  const hA = periodHabits(base.from, base.to, domain);
+  const hB = periodHabits(vs.from, vs.to, domain);
+  const avgA = periodHabitAvg(hA), avgB = periodHabitAvg(hB);
+
+  const periodOptions = chosen => {
+    let out = '';
+    for(let o=0; o > -PERIODS[gran].back; o--){
+      const w = periodWindow(gran, o), rel = periodRel(gran, o);
+      out += `<option value="${o}" ${Number(chosen)===o?'selected':''}>${esc(w.label)}${rel?` (${rel})`:''}</option>`;
+    }
+    return out;
+  };
+  const sel = 'font-size:13px;padding:7px 9px;border-radius:10px;border:1px solid var(--c-border);background:var(--c-surface);color:var(--c-text)';
+
+  const dp = B.points - A.points;
+  const nothing = !A.points && !B.points && !A.projectsDone.length && !B.projectsDone.length
+                  && !A.tasksDone.length && !B.tasksDone.length;
+  const headline = base.from===vs.from ? 'Same period on both sides — pick two different ones to see a change.'
+    : nothing ? `Nothing was closed in ${esc(base.label)} or ${esc(vs.label)}${domain==='all'?'':' for '+esc(domain)}.`
+    : dp>0 ? `<b>${esc(vs.label)}</b> is ahead of ${esc(base.label)} by ${dp} effort point${dp===1?'':'s'}.`
+    : dp<0 ? `<b>${esc(vs.label)}</b> is behind ${esc(base.label)} by ${-dp} effort point${dp===-1?'':'s'}.`
+    : `Both periods closed the same ${B.points} effort point${B.points===1?'':'s'}.`;
+  const running = [A.running ? `${esc(base.label)} is still running (${A.daysElapsed} of ${A.daysTotal} days)` : '',
+                   B.running ? `${esc(vs.label)} is still running (${B.daysElapsed} of ${B.daysTotal} days)` : '']
+                  .filter(Boolean).join(' · ');
+
+  // Life areas that appear on either side, ordered by the later period's effort.
+  const areaNames = Array.from(new Set(A.byArea.map(x=>x.area).concat(B.byArea.map(x=>x.area))));
+  const pick = (stats, name) => stats.byArea.find(x=>x.area===name) || {projects:0,milestones:0,tasks:0,points:0};
+  const areaRows = areaNames.map(n=>({ name:n, a:pick(A,n), b:pick(B,n) }))
+                            .sort((x,y)=>(y.b.points-x.b.points) || (y.a.points-x.a.points));
+
+  // Habits tracked in either period, so a habit started midway still shows up.
+  const habitIds = Array.from(new Set(hA.map(x=>x.habit.id).concat(hB.map(x=>x.habit.id))));
+  const habitRows = habitIds.map(id=>{
+    const a = hA.find(x=>x.habit.id===id), b = hB.find(x=>x.habit.id===id);
+    return { habit: (b||a).habit, a: a? a.pct : null, b: b? b.pct : null };
+  });
+
+  return `
+    <div class="card" style="margin-bottom:18px;padding:16px 18px">
+      <div style="font-weight:600;font-size:14.5px;margin-bottom:2px">Compare two periods</div>
+      <div class="view-sub" style="margin-bottom:12px">Put one week, month or year next to another and see what actually changed.</div>
+      <div class="chip-row" style="margin-bottom:10px">
+        ${Object.keys(PERIODS).map(k=>`<button class="chip ${gran===k?'on':''}" data-action="compare-gran" data-gran="${k}">${PERIODS[k].label}</button>`).join('')}
+      </div>
+      <div class="filter-bar" style="margin-bottom:0">
+        <span class="view-sub" style="margin:0;align-self:center">Compare</span>
+        <select data-action-change="compare-base" style="${sel}">${periodOptions(ui.compareBase)}</select>
+        <span class="view-sub" style="margin:0;align-self:center">with</span>
+        <select data-action-change="compare-vs" style="${sel}">${periodOptions(ui.compareVs)}</select>
+        <select data-action-change="compare-domain" style="${sel}">
+          <option value="all" ${domain==='all'?'selected':''}>All areas</option>
+          ${doms.map(n=>`<option value="${esc(n)}" ${domain===n?'selected':''}>${esc(n)}</option>`).join('')}
+        </select>
+      </div>
+    </div>
+
+    <div class="view-sub" style="margin:-4px 0 12px;font-size:14px;color:var(--c-text-secondary)">${headline}</div>
+    ${running? `<div class="view-sub" style="margin:-6px 0 12px">${running} — a part-finished period will always look smaller.</div>` : ''}
+
+    <div class="card" style="margin-bottom:20px;padding:14px 16px">
+      <div class="mini-table-wrap">
+      <table class="mini-table">
+        <thead><tr><th>What closed</th><th class="num">${esc(base.label)}</th><th class="num">${esc(vs.label)}</th><th class="num">Change</th></tr></thead>
+        <tbody>
+          ${compareRow('Projects completed', A.projectsDone.length, B.projectsDone.length)}
+          ${compareRow('Projects moved forward', A.advanced.length, B.advanced.length)}
+          ${compareRow('Milestones closed', A.milestoneCount, B.milestoneCount)}
+          ${compareRow('Tasks closed', A.tasksDone.length, B.tasksDone.length)}
+          ${compareRow('— of those, recurring', A.recurring.length, B.recurring.length)}
+          ${compareRow('Effort points', A.points, B.points)}
+          ${compareRow('Habit consistency', avgA, avgB, '%')}
+        </tbody>
+      </table>
+      </div>
+      <div class="view-sub" style="margin:8px 0 0">Effort sizes: S=1, M=2, L=3, XL=5. Habit consistency averages the active habits${domain==='all'?'':' in this area'}, each measured against its own schedule inside the period.</div>
+    </div>
+
+    ${domain==='all' && areaRows.length? `
+      <div class="section-label">By life area</div>
+      <div class="card" style="margin-bottom:20px;padding:14px 16px">
+        <div class="mini-table-wrap">
+        <table class="mini-table">
+          <thead><tr><th>Life area</th><th class="num">${esc(base.label)}</th><th class="num">${esc(vs.label)}</th><th class="num">Change</th></tr></thead>
+          <tbody>
+            ${areaRows.map(r=>`<tr>
+              <td><span class="chip" style="${catStyle(r.name)}">${esc(r.name)}</span></td>
+              <td class="num">${r.a.points}</td>
+              <td class="num">${r.b.points}</td>
+              ${compareDelta(r.a.points, r.b.points)}
+            </tr>`).join('')}
+          </tbody>
+        </table>
+        </div>
+        <div class="view-sub" style="margin:8px 0 0">Effort points closed in each area — where your time actually went.</div>
+      </div>` : ''}
+
+    ${habitRows.length? `
+      <div class="section-label">Habits</div>
+      <div class="card" style="margin-bottom:20px;padding:14px 16px">
+        <div class="mini-table-wrap">
+        <table class="mini-table">
+          <thead><tr><th>Habit</th><th class="num">${esc(base.label)}</th><th class="num">${esc(vs.label)}</th><th class="num">Change</th></tr></thead>
+          <tbody>
+            ${habitRows.map(r=>`<tr>
+              <td>${esc(r.habit.emoji||'')} ${esc(r.habit.name)}</td>
+              <td class="num">${r.a===null?'—':r.a+'%'}</td>
+              <td class="num">${r.b===null?'—':r.b+'%'}</td>
+              ${compareDelta(r.a, r.b, '%')}
+            </tr>`).join('')}
+          </tbody>
+        </table>
+        </div>
+      </div>` : ''}
+  `;
+}
+
 function renderReportsTimelineView(){
   const all = completedItems();
   const filtered = all.filter(inHistoryRange).sort((a,b)=>b.completedAt.localeCompare(a.completedAt));
   const rangeLabel = {month:'this month', '30d':'in the last 30 days', all:'yet', custom:'in this range'}[ui.historyRange] || '';
-  // Domains that actually hold completed work, so the picker never offers a dead choice.
-  const bragDomains = Array.from(new Set(completedItems().map(i=>i.category)))
-    .concat(projects().filter(p=>(p.subtasks||[]).some(sx=>sx.done)).map(p=>p.category))
-    .filter((v,i,a)=>a.indexOf(v)===i).sort();
+  const bragDomains = doneDomains();
   // Default to whichever domain looks like the day job, so the common case is one click.
   const bragDomain = bragDomains.indexOf(ui.bragDomain)>=0 ? ui.bragDomain
     : (bragDomains.find(n=>/intelmotion|intel group/i.test(n)) || 'all');
@@ -3926,13 +4097,55 @@ const BRAG_RANGES = {
   all:     { label:'All time',      from: () => '0000-01-01' }
 };
 
+/* =========================================================
+   Periods — one window, one set of numbers
+   The brag file and the period comparison both ask periodStats for the same
+   shape, so the two can never quietly disagree about what counts as a closed
+   milestone or an effort point.
+   ========================================================= */
+const PERIODS = {
+  week:  { label:'Week',  noun:'week',  back:12 },
+  month: { label:'Month', noun:'month', back:12 },
+  year:  { label:'Year',  noun:'year',  back:5 }
+};
+
+function dayCount(from, to){
+  return Math.round((new Date(to+'T00:00:00') - new Date(from+'T00:00:00'))/86400000) + 1;
+}
+
+/* offset 0 is the period running now, -1 the one before it, and so on back. */
+function periodWindow(gran, offset){
+  offset = offset|0;
+  const now = new Date();
+  if(gran==='week'){
+    const a = addDays(startOfWeek(now), offset*7), b = addDays(a,6);
+    const o = {day:'numeric', month:'short'};
+    const yr = b.getFullYear()!==now.getFullYear() ? ' '+b.getFullYear() : '';
+    return { gran, offset, from:fmtISO(a), to:fmtISO(b),
+             label: a.toLocaleDateString(undefined,o)+' – '+b.toLocaleDateString(undefined,o)+yr };
+  }
+  if(gran==='year'){
+    const y = now.getFullYear()+offset;
+    return { gran, offset, from:y+'-01-01', to:y+'-12-31', label:String(y) };
+  }
+  const a = new Date(now.getFullYear(), now.getMonth()+offset, 1);
+  const b = new Date(a.getFullYear(), a.getMonth()+1, 0);   // day 0 of next month = last day of this one
+  return { gran, offset, from:fmtISO(a), to:fmtISO(b),
+           label: a.toLocaleDateString(undefined,{month:'long'})
+                  + (a.getFullYear()!==now.getFullYear() ? ' '+a.getFullYear() : '') };
+}
+
+function periodRel(gran, offset){
+  const n = (PERIODS[gran]||PERIODS.month).noun;
+  return offset===0 ? 'this '+n : offset===-1 ? 'last '+n : '';
+}
+
 /* Everything closed in the window, for one domain or all of them. Milestones are
    not items, so they are gathered off their projects by the date they closed. */
-function bragData(rangeKey, domain){
-  const r = BRAG_RANGES[rangeKey] || BRAG_RANGES.month;
-  const from = r.from(), to = todayISO();
+function periodStats(from, to, domain){
   const inRange = d => !!d && d.slice(0,10) >= from && d.slice(0,10) <= to;
-  const inDomain = c => domain==='all' || c===domain;
+  const inDomain = c => !domain || domain==='all' || c===domain;
+  const weight = u => (EFFORT[u.effort]||EFFORT[DEFAULT_EFFORT]).weight;
 
   const doneItems = completedItems().filter(i=>inRange(i.completedAt) && inDomain(i.category));
   const projectsDone = doneItems.filter(i=>i.type==='project');
@@ -3949,24 +4162,62 @@ function bragData(rangeKey, domain){
   });
   advanced.sort((a,b)=>b.closed.length-a.closed.length);
 
-  const weight = u => (EFFORT[u.effort]||EFFORT[DEFAULT_EFFORT]).weight;
   // Steps inside a delivered project still count — they were done, they just are
   // not listed separately because the delivery already covers them.
-  const deliveredSteps = projectsDone.reduce((a,p)=>
-    a + (p.subtasks||[]).filter(sx=>sx.done && inRange(sx.doneAt)).length, 0);
-  const deliveredPoints = projectsDone.reduce((a,p)=>
-    a + (p.subtasks||[]).filter(sx=>sx.done && inRange(sx.doneAt)).reduce((n,c)=>n+weight(c),0), 0);
+  const deliveredClosed = projectsDone.map(p=>({ project:p,
+    closed:(p.subtasks||[]).filter(sx=>sx.done && inRange(sx.doneAt)) }));
+  const deliveredSteps = deliveredClosed.reduce((a,x)=>a+x.closed.length, 0);
+  const deliveredPoints = deliveredClosed.reduce((a,x)=>a+x.closed.reduce((n,c)=>n+weight(c),0), 0);
   const points = advanced.reduce((a,x)=>a + x.closed.reduce((n,c)=>n+weight(c),0), 0)
                + tasksDone.reduce((a,t)=>a+weight(t),0) + deliveredPoints;
+
+  // The same numbers split by life area, for the side-by-side comparison.
+  const areas = {};
+  const bump = (cat, key, n) => {
+    const a = areas[cat] || (areas[cat] = {area:cat, projects:0, milestones:0, tasks:0, points:0});
+    a[key] += n;
+  };
+  projectsDone.forEach(p=>bump(p.category,'projects',1));
+  tasksDone.forEach(t=>{ bump(t.category,'tasks',1); bump(t.category,'points',weight(t)); });
+  advanced.concat(deliveredClosed).forEach(x=>{
+    bump(x.project.category,'milestones',x.closed.length);
+    bump(x.project.category,'points', x.closed.reduce((n,c)=>n+weight(c),0));
+  });
 
   const recurring = tasksDone.filter(t=>t.seriesId);
   const standalone = tasksDone.filter(t=>!t.seriesId && !t.projectId);
   const projectTasks = tasksDone.filter(t=>!t.seriesId && t.projectId);
   const people = Array.from(new Set(doneItems.map(i=>i.assignee).filter(Boolean)));
 
-  return { from, to, label:r.label, domain, projectsDone, tasksDone, advanced,
+  const today = todayISO();
+  const daysTotal = dayCount(from, to);
+  const daysElapsed = today < from ? 0 : dayCount(from, today < to ? today : to);
+
+  return { from, to, domain, projectsDone, tasksDone, advanced,
            recurring, standalone, projectTasks, points, people,
+           byArea: Object.keys(areas).map(k=>areas[k]).sort((a,b)=>b.points-a.points),
+           daysTotal, daysElapsed, running: to > today,
            milestoneCount: advanced.reduce((a,x)=>a+x.closed.length,0) + deliveredSteps };
+}
+
+/* Habit consistency inside the window. Kept out of periodStats because it walks
+   the window day by day, and the brag file's "all time" range is 700,000 days. */
+function periodHabits(from, to, domain){
+  return activeHabits()
+    .filter(h=>!domain || domain==='all' || h.category===domain)
+    .map(h=>({ habit:h, pct: habitConsistencyBetween(h, from, to) }));
+}
+
+function periodHabitAvg(list){
+  const scored = list.filter(x=>x.pct!==null);
+  return scored.length ? Math.round(scored.reduce((a,x)=>a+x.pct,0)/scored.length) : null;
+}
+
+function bragData(rangeKey, domain){
+  const r = BRAG_RANGES[rangeKey] || BRAG_RANGES.month;
+  const d = periodStats(r.from(), todayISO(), domain);
+  d.label = r.label;
+  return d;
 }
 
 function exportBragFile(rangeKey, domain){
@@ -4214,6 +4465,57 @@ function exportHabitsReport(){
   pushToast('Habits report downloaded');
 }
 
+function exportCompareReport(){
+  const gran = PERIODS[ui.compareGran] ? ui.compareGran : 'month';
+  const doms = compareDomains();
+  const domain = doms.indexOf(ui.compareDomain)>=0 ? ui.compareDomain : 'all';
+  const base = periodWindow(gran, ui.compareBase), vs = periodWindow(gran, ui.compareVs);
+  const A = periodStats(base.from, base.to, domain), B = periodStats(vs.from, vs.to, domain);
+  const hA = periodHabits(base.from, base.to, domain), hB = periodHabits(vs.from, vs.to, domain);
+  const avgA = periodHabitAvg(hA), avgB = periodHabitAvg(hB);
+  const num = (v, suffix) => v===null ? '—' : v + (suffix||'');
+  const delta = (a, b, suffix) => (a===null||b===null) ? '—'
+    : (b-a)===0 ? 'same' : ((b-a)>0?'+':'−') + Math.abs(b-a) + (suffix||'');
+  const row = (label, a, b, suffix) => `<tr><td>${label}</td><td align="right">${num(a,suffix)}</td><td align="right">${num(b,suffix)}</td><td align="right">${delta(a,b,suffix)}</td></tr>`;
+
+  const areaNames = Array.from(new Set(A.byArea.map(x=>x.area).concat(B.byArea.map(x=>x.area))));
+  const pick = (st, n) => st.byArea.find(x=>x.area===n) || {points:0};
+  const areaRows = areaNames.map(n=>({ name:n, a:pick(A,n).points, b:pick(B,n).points }))
+                            .sort((x,y)=>(y.b-x.b)||(y.a-x.a));
+  const habitIds = Array.from(new Set(hA.map(x=>x.habit.id).concat(hB.map(x=>x.habit.id))));
+
+  const html = `<h1>${esc(base.label)} vs ${esc(vs.label)}</h1>
+    <p class="muted">Generated ${new Date().toLocaleDateString(undefined,{year:'numeric',month:'long',day:'numeric'})} &nbsp;·&nbsp; ${domain==='all'?'All areas':esc(domain)}
+      &nbsp;·&nbsp; ${base.from} to ${base.to} against ${vs.from} to ${vs.to}</p>
+    ${A.running||B.running? `<p class="muted">${A.running?esc(base.label)+' ':''}${B.running?esc(vs.label)+' ':''}still running — a part-finished period will always look smaller.</p>`:''}
+    <table cellpadding="6" cellspacing="0" border="1" style="border-collapse:collapse;border-color:#E2E8F0">
+      <tr><th align="left">What closed</th><th align="right">${esc(base.label)}</th><th align="right">${esc(vs.label)}</th><th align="right">Change</th></tr>
+      ${row('Projects completed', A.projectsDone.length, B.projectsDone.length)}
+      ${row('Projects moved forward', A.advanced.length, B.advanced.length)}
+      ${row('Milestones closed', A.milestoneCount, B.milestoneCount)}
+      ${row('Tasks closed', A.tasksDone.length, B.tasksDone.length)}
+      ${row('— of those, recurring', A.recurring.length, B.recurring.length)}
+      ${row('Effort points', A.points, B.points)}
+      ${row('Habit consistency', avgA, avgB, '%')}
+    </table>
+    ${areaRows.length? `<h2>By life area</h2>
+    <table cellpadding="6" cellspacing="0" border="1" style="border-collapse:collapse;border-color:#E2E8F0">
+      <tr><th align="left">Life area</th><th align="right">${esc(base.label)}</th><th align="right">${esc(vs.label)}</th><th align="right">Change</th></tr>
+      ${areaRows.map(r=>row(esc(r.name), r.a, r.b)).join('')}
+    </table>
+    <p class="muted">Effort points closed in each area.</p>`:''}
+    ${habitIds.length? `<h2>Habits</h2>
+    <table cellpadding="6" cellspacing="0" border="1" style="border-collapse:collapse;border-color:#E2E8F0">
+      <tr><th align="left">Habit</th><th align="right">${esc(base.label)}</th><th align="right">${esc(vs.label)}</th><th align="right">Change</th></tr>
+      ${habitIds.map(id=>{ const a=hA.find(x=>x.habit.id===id), b=hB.find(x=>x.habit.id===id);
+        const h=(b||a).habit;
+        return row(esc((h.emoji||'')+' '+h.name), a?a.pct:null, b?b.pct:null, '%'); }).join('')}
+    </table>`:''}
+    <p class="muted">Effort sizes: S=1, M=2, L=3, XL=5. Habit consistency measures each active habit against its own schedule inside the period, then averages them.</p>`;
+  downloadWordDoc(`comparison-${base.from}-vs-${vs.from}.doc`, `${base.label} vs ${vs.label}`, html);
+  pushToast('Comparison downloaded');
+}
+
 function exportTimelineReport(){
   const rows = completedItems().filter(inHistoryRange).sort((a,b)=>b.completedAt.localeCompare(a.completedAt));
   const label = {month:'this month','30d':'last 30 days',all:'all time',custom:'selected range'}[ui.historyRange] || '';
@@ -4405,12 +4707,14 @@ function handleAction(action, el){
     }
     case 'project-health-filter': ui.projectHealthFilter = el.getAttribute('data-health'); render(); break;
     case 'export-portfolio': exportPortfolioReport(); break;
+    case 'compare-gran': ui.compareGran = el.getAttribute('data-gran'); render(); break;
+    case 'compare-base': ui.compareBase = parseInt(el.value,10)||0; render(); break;
+    case 'compare-vs': ui.compareVs = parseInt(el.value,10)||0; render(); break;
+    case 'compare-domain': ui.compareDomain = el.value; render(); break;
     case 'brag-range': ui.bragRange = el.value; render(); break;
     case 'brag-domain': ui.bragDomain = el.value; render(); break;
     case 'export-brag': {
-      const doms = Array.from(new Set(completedItems().map(i=>i.category)))
-        .concat(projects().filter(p=>(p.subtasks||[]).some(sx=>sx.done)).map(p=>p.category))
-        .filter((v,i,a)=>a.indexOf(v)===i);
+      const doms = doneDomains();
       const dom = doms.indexOf(ui.bragDomain)>=0 ? ui.bragDomain
         : (doms.find(n=>/intelmotion|intel group/i.test(n)) || 'all');
       exportBragFile(ui.bragRange, dom);
@@ -4419,6 +4723,7 @@ function handleAction(action, el){
     case 'export-report': {
       const t = ui.reportsTab;
       if(t==='areas') exportAreasReport();
+      else if(t==='compare') exportCompareReport();
       else if(t==='habits') exportHabitsReport();
       else if(t==='timeline') exportTimelineReport();
       else exportPortfolioReport();
