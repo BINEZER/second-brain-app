@@ -576,7 +576,7 @@ async function launch() {
 
   console.log('\nREPORTS — every tab exports');
   await page.click('[data-action="nav"][data-view="reports"]');
-  for (const tab of ['areas', 'projects', 'habits', 'timeline']) {
+  for (const tab of ['areas', 'projects', 'habits', 'compare', 'timeline']) {
     await page.click(`[data-tab="${tab}"]`);
     await page.waitForTimeout(300);
     const dl = page.waitForEvent('download', { timeout: 10000 }).catch(() => null);
@@ -584,6 +584,42 @@ async function launch() {
     const got = await dl;
     ok(`${tab} exports`, !!got, got ? got.suggestedFilename() : 'no download');
   }
+
+  console.log('\nREPORTS — two periods, side by side');
+  await page.click('[data-tab="compare"]');
+  await page.waitForSelector('.mini-table');
+  let heads = await page.locator('.mini-table').first().locator('thead th').allInnerTexts();
+  ok('the table is headed by both periods and the change', heads.length === 4 && /change/i.test(heads[3]), heads);
+  ok('  and the two periods are different', heads[1] !== heads[2], heads);
+
+  /* The number on screen has to be the number in the data — computed here from
+     the items themselves, not from the same helper the view uses. */
+  const shownTasks = await page.locator('.mini-table tbody tr').filter({ hasText: 'Tasks closed' })
+    .first().locator('td.num').nth(1).innerText();
+  const realTasks = await page.evaluate(() => {
+    const first = new Date().toISOString().slice(0, 8) + '01';
+    return completedItems().filter(i => i.type === 'task' && i.completedAt.slice(0, 10) >= first).length;
+  });
+  ok('this month\'s tasks-closed matches the data', Number(shownTasks) === realTasks, { shownTasks, realTasks });
+
+  await page.click('[data-action="compare-gran"][data-gran="year"]');
+  await page.waitForTimeout(300);
+  heads = await page.locator('.mini-table').first().locator('thead th').allInnerTexts();
+  ok('switching to years re-labels the columns', /^\d{4}$/.test(heads[2].trim()), heads);
+
+  // Both sides set to the same period must say so rather than show a fake change.
+  await page.click('[data-action="compare-gran"][data-gran="month"]');
+  await page.waitForTimeout(300);
+  await page.selectOption('[data-action-change="compare-base"]', '0');
+  await page.waitForTimeout(300);
+  ok('the same period on both sides is called out',
+    /pick two different/i.test(await page.locator('.view').innerText()));
+  await page.selectOption('[data-action-change="compare-base"]', '-1');
+  await page.waitForTimeout(300);
+  ok('  and picking a different one brings the comparison back',
+    !/pick two different/i.test(await page.locator('.view').innerText()));
+  await page.click('[data-tab="projects"]');
+  await page.waitForTimeout(300);
 
   console.log('\nREPORTS — numeric headers sit over their numbers');
   await page.click('[data-tab="projects"]');
