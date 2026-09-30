@@ -2464,6 +2464,12 @@ function inHistoryRange(it){
   return true;
 }
 
+/* Habits a consistency average should be measured over. A retired habit is one
+   you deliberately stopped, so counting its 0% as a failure drags the number down
+   and punishes the decision to drop it. The export already excluded retired
+   habits while the views did not, so the app disagreed with itself. */
+function activeHabits(){ return state.state.habits.filter(h=>h.active!==false); }
+
 function habitConsistency(habit, days){
   days = days||30;
   const f = habit.frequency || {type:'daily'};
@@ -2556,7 +2562,7 @@ function renderCharts(){
   }
   const habitCanvas = document.getElementById('chart-habits');
   if(habitCanvas){
-    const list = state.state.habits;
+    const list = activeHabits();
     charts.habits = new Chart(habitCanvas, { type:'bar',
       data:{ labels: list.map(h=>h.emoji+' '+h.name), datasets:[{ data: list.map(h=>habitConsistency(h)), backgroundColor:'#F59E0B', borderRadius:4 }] },
       options: barChartOptions(true)
@@ -2587,7 +2593,7 @@ function renderAreaProgress(a){
   const done = areaItems.filter(i=>i.status==='done').length;
   const total = areaItems.length;
   const pct = total? Math.round(done/total*100) : 0;
-  const areaHabits = state.state.habits.filter(h=>h.category===a.name);
+  const areaHabits = activeHabits().filter(h=>h.category===a.name);
   const habitAvg = areaHabits.length? Math.round(areaHabits.reduce((s,h)=>s+habitConsistency(h),0)/areaHabits.length) : null;
   const port = portfolioStats(reportProjectList().filter(p=>p.category===a.name));
   return `<div class="project-card">
@@ -2817,10 +2823,11 @@ function renderProjectReportRow(p, st, i){
 }
 
 function renderReportsHabitsView(){
-  const list = state.state.habits;
+  const list = activeHabits();
+  const retired = state.state.habits.length - list.length;
   const avgConsistency = list.length? Math.round(list.reduce((s,h)=>s+habitConsistency(h),0)/list.length) : 0;
   return `
-    <div class="view-sub" style="margin-bottom:14px">${list.length} habit${list.length===1?'':'s'} · ${avgConsistency}% average 30-day consistency.</div>
+    <div class="view-sub" style="margin-bottom:14px">${list.length} active habit${list.length===1?'':'s'} · ${avgConsistency}% average 30-day consistency.${retired? ` <span style="color:var(--c-text-muted)">${retired} retired habit${retired===1?'':'s'} not counted.</span>`:''}</div>
     ${list.length? chartCard('chart-habits', Math.max(120,list.length*32)) : ''}
     ${list.length? list.map(renderHabitReportRow).join('') : `<div class="empty">No habits yet.</div>`}
   `;
@@ -3366,7 +3373,7 @@ function modalAreaDetail(area){
   const areaItems = items().filter(i=>i.category===area.name && (i.type==='task'||i.type==='project'));
   const done = areaItems.filter(i=>i.status==='done').length;
   const total = areaItems.length;
-  const areaHabits = state.state.habits.filter(h=>h.category===area.name);
+  const areaHabits = activeHabits().filter(h=>h.category===area.name);
   openModal(`
     <h3>${esc(area.name)}</h3>
     <div class="view-sub" style="margin-bottom:10px">${esc(area.purpose)}</div>
@@ -4165,7 +4172,7 @@ function exportAreasReport(){
     const areaItems = items().filter(i=>i.category===a.name && (i.type==='task'||i.type==='project'));
     const done = areaItems.filter(i=>i.status==='done').length;
     const port = portfolioStats(reportProjectList().filter(p=>p.category===a.name));
-    const hb = state.state.habits.filter(h=>h.category===a.name && h.active!==false);
+    const hb = activeHabits().filter(h=>h.category===a.name);
     return { name:a.name, done, total:areaItems.length,
       taskPct: areaItems.length? Math.round(done/areaItems.length*100) : null,
       projPct: port.weightedPct, projects: port.total, offTrack: port.offTrack,

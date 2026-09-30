@@ -203,5 +203,33 @@ resetApp();
   ok('"all areas" includes the other domain', allDom.tasksDone.some(t => t.category === 'Home'));
 })();
 
+/* ---- a retired habit must not drag the consistency average down ----
+   Retiring a habit is a decision to stop, not a failure to keep it, but the
+   report averaged every habit and scored the retired ones 0%. Two habits kept
+   perfectly alongside three retired ones read as 40%. */
+resetApp();
+(function(){
+  const iso = n => { const d = new Date(); d.setDate(d.getDate()-n); return __in('fmtISO')(d); };
+  const every = Array.from({length:30}, (_,i) => i);
+  const mk = (name, active, offs) => {
+    const log = {}; offs.forEach(o => log[iso(o)] = true);
+    return { id:'h'+name, name, emoji:'x', category:'Home', active, frequency:{type:'daily'}, log };
+  };
+  __getState().state.habits = [
+    mk('Kept A', true, every), mk('Kept B', true, every),
+    mk('Dropped 1', false, []), mk('Dropped 2', false, []), mk('Dropped 3', false, [])
+  ];
+  const avg = l => l.length ? Math.round(l.reduce((s,h) => s + habitConsistency(h), 0) / l.length) : 0;
+  const active = __in('activeHabits')();
+  eq('activeHabits leaves the retired ones out', active.length, 2);
+  ok('  and keeps only live ones', active.every(h => h.active !== false));
+  eq('two habits kept perfectly average 100%, not 40%', avg(active), 100);
+  eq('  (averaging every habit is what produced 40%)', avg(__getState().state.habits), 40);
+  // A habit with no `active` field at all is live, not retired.
+  __getState().state.habits.push({ id:'hx', name:'Legacy', emoji:'x', category:'Home',
+    frequency:{type:'daily'}, log:{} });
+  eq('a habit with no active flag counts as active', __in('activeHabits')().length, 3);
+})();
+
 console.log(`recurring: ${passes} passed, ${fails} failed`);
 process.exit(fails ? 1 : 0);
