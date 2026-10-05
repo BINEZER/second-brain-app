@@ -45,6 +45,8 @@
         margin:0;background:var(--c-bg);color:var(--c-text);
         font-family:Inter,ui-sans-serif,system-ui,sans-serif;
         -webkit-font-smoothing:antialiased;line-height:1.45;
+        /* Safari inflates text in landscape and flashes grey on every tap. */
+        -webkit-text-size-adjust:100%;-webkit-tap-highlight-color:transparent;
       }
       .font-display{font-family:'Space Grotesk',Inter,sans-serif}
       .font-mono{font-family:'JetBrains Mono',monospace}
@@ -54,11 +56,11 @@
       ::selection{background:var(--c-info-dim)}
 
       /* ---------- shell ---------- */
-      #app{display:flex;min-height:100vh}
+      #app{display:flex;min-height:100vh;min-height:100dvh}
       .sidebar{
         width:230px;flex-shrink:0;background:var(--c-surface);border-right:1px solid var(--c-border);
         display:flex;flex-direction:column;padding:18px 14px;gap:4px;transition:width .18s ease,padding .18s ease;
-        position:sticky;top:0;height:100vh;overflow-y:auto;
+        position:sticky;top:0;height:100vh;height:100dvh;overflow-y:auto;-webkit-overflow-scrolling:touch;
       }
       .sidebar.collapsed{width:72px;padding:18px 10px}
       .sb-head{display:flex;align-items:center;justify-content:space-between;padding:0 6px 16px;gap:8px}
@@ -67,6 +69,10 @@
       .sidebar.collapsed .sb-brand span{display:none}
       .sb-toggle{width:28px;height:28px;border-radius:8px;border:1px solid var(--c-border);background:var(--c-surface);color:var(--c-text-muted);display:flex;align-items:center;justify-content:center;flex-shrink:0}
       .sb-toggle:hover{background:var(--c-surface-alt)}
+      /* Phone-only nav chrome: the menu button, the drawer's close button and the
+         scrim behind it. All three are switched on by the narrow-screen block below. */
+      .icon-btn.nav-btn,.sb-close{display:none}
+      .nav-scrim{display:none}
       .nav-item{display:flex;align-items:center;gap:11px;padding:9px 10px;border-radius:var(--radius-sm);color:var(--c-text-secondary);text-decoration:none;font-size:14px;font-weight:500;white-space:nowrap;overflow:hidden}
       .nav-item .ic{width:18px;height:18px;flex-shrink:0;display:flex;align-items:center;justify-content:center}
       .nav-item:hover{background:var(--c-surface-alt);color:var(--c-text)}
@@ -164,7 +170,7 @@
       .habit-strip-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
       .habit-row{display:flex;align-items:center;gap:12px;padding:8px 0}
       .habit-row+.habit-row{border-top:1px solid var(--c-border)}
-      .habit-name{width:130px;flex-shrink:0;font-size:13.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:flex;align-items:center;gap:6px}
+      .habit-name{width:180px;flex-shrink:0;font-size:13.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:flex;align-items:center;gap:6px}
       .habit-days{display:flex;gap:6px;flex:1}
       .day-cell{flex:1;text-align:center}
       .day-lbl{font-size:10px;color:var(--c-text-muted);font-weight:700;margin-bottom:4px}
@@ -239,7 +245,7 @@
       /* A numeric header must sit directly over its numbers: same alignment AND
          same right edge, or the column reads as two columns that drifted apart. */
       .mini-table th.num{text-align:right;padding-right:0;white-space:nowrap}
-      .mini-table th.num,.mini-table td.num{font-variant-numeric:tabular-nums}
+      .mini-table th.num,.mini-table td.num{font-variant-numeric:tabular-nums;padding-left:10px}
       .mini-table-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
       .mini-table tr.row-link{cursor:pointer}
       .mini-table tr.row-link:hover td{background:var(--c-surface-alt)}
@@ -247,6 +253,7 @@
       .project-body{border-top:1px solid var(--c-border);padding:16px 18px;background:var(--c-surface-alt)}
       .sub-list{margin-bottom:12px}
       .sub-row{display:flex;align-items:center;gap:10px;padding:6px 0;font-size:13.5px}
+      .sub-title{flex:1;min-width:0;word-break:break-word}
       .sub-add{display:flex;gap:8px;margin-top:8px}
       .sub-add input{flex:1;padding:7px 10px;border-radius:8px;border:1px solid var(--c-border);background:var(--c-surface);font-size:13px}
       .rv-step{display:flex;gap:11px;align-items:flex-start;padding:11px 0;border-bottom:1px solid var(--c-border)}
@@ -330,12 +337,129 @@
       .triage-actions .full{grid-column:1/-1}
 
       .visually-hidden{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+      /* =========================================================
+         Phones and tablets
+
+         The sidebar used to stay in the layout at every width: on a 414px
+         screen it covered more than half the page and swallowed every tap
+         underneath it. Below 820px it becomes a drawer — off screen until the
+         menu button opens it, over a scrim that closes it, and closing itself
+         whenever a destination is chosen, because on a phone the nav is a
+         detour rather than a place to be.
+         ========================================================= */
       @media (max-width:820px){
-        .sidebar{position:fixed;left:0;top:0;z-index:40;transform:translateX(0)}
-        .sidebar.collapsed{width:0;padding:0;overflow:hidden;border:none}
-        .main{width:100%}
+        .sidebar,.sidebar.collapsed{
+          position:fixed;left:0;top:0;z-index:60;width:min(78vw,264px);padding:18px 14px;
+          border-right:1px solid var(--c-border);box-shadow:var(--shadow-2);
+          transform:translateX(-100%);transition:transform .22s ease;
+        }
+        .sidebar.open{transform:translateX(0)}
+        /* The desktop icon rail has no meaning in a drawer — show the full labels. */
+        .sidebar.collapsed .sb-brand span,.sidebar.collapsed .nav-item span.label{display:inline}
+        .sidebar.collapsed .nav-badge{display:inline-block}
+        .sidebar.collapsed .nav-group-label{display:block}
+        .sidebar.collapsed .nav-item{justify-content:flex-start}
+        .sb-toggle{display:none}
+        .sb-close{display:flex;align-items:center;justify-content:center;width:36px;height:36px;border-radius:10px;
+          border:1px solid var(--c-border);background:var(--c-surface);color:var(--c-text-secondary);font-size:15px;flex-shrink:0}
+        .icon-btn.nav-btn{display:flex;flex-shrink:0}
+        .nav-scrim{display:block;position:fixed;inset:0;z-index:55;background:rgba(15,23,42,.45);
+          opacity:0;pointer-events:none;transition:opacity .22s ease}
+        /* touch-action:none so a swipe over the scrim dismisses rather than
+           scrolling the page hidden behind the drawer. */
+        .nav-scrim.on{opacity:1;pointer-events:auto;touch-action:none;overscroll-behavior:contain}
+        .nav-item{padding:12px 10px}
+
+        .main{width:100%;min-width:0}
         .view{padding:18px 16px 70px}
-        .topbar{padding:12px 16px}
+        .topbar{padding:10px 14px;gap:10px;flex-wrap:nowrap}
+        .xp-block{min-width:0;flex:1 1 auto;gap:8px}
+        .xp-mid{min-width:0}
+        .xp-level{width:32px;height:32px;border-radius:9px;font-size:13px}
+        .topbar-actions{margin-left:0;flex-shrink:0}
+        .streak-chip{padding:6px 10px}
+
+        /* iOS zooms the whole page in when a focused field is under 16px. */
+        input,select,textarea,.search-box,.capture input,.field input,.field select,
+        .field textarea,.sub-add input,.import-box{font-size:16px}
+
+        #toast-stack{left:12px;right:12px;bottom:16px;align-items:stretch}
+        .toast{max-width:100%}
+
+        .modal-overlay{padding:14px 10px 28px}
+        .modal{padding:18px 16px 20px}
+        .modal-actions{flex-wrap:wrap}
+        .modal-actions .btn{flex:1 1 auto;justify-content:center}
+      }
+
+      /* Notch and home-indicator insets, for the installed-to-home-screen app,
+         which draws under both. */
+      @supports (padding:max(0px)){
+        @media (max-width:820px){
+          .topbar{padding-top:max(10px,env(safe-area-inset-top));
+                  padding-left:max(14px,env(safe-area-inset-left));
+                  padding-right:max(14px,env(safe-area-inset-right))}
+          .sidebar,.sidebar.collapsed{padding-top:max(18px,env(safe-area-inset-top));
+                  padding-bottom:max(18px,env(safe-area-inset-bottom))}
+          .view{padding-left:max(16px,env(safe-area-inset-left));
+                padding-right:max(16px,env(safe-area-inset-right));
+                padding-bottom:max(70px,env(safe-area-inset-bottom))}
+          #toast-stack{bottom:max(16px,env(safe-area-inset-bottom))}
+        }
+      }
+
+      /* Rows built as one line of title plus a tail of buttons: on a narrow
+         screen the buttons won, squeezing the title to one letter per line.
+         The buttons drop to their own line instead. */
+      @media (max-width:620px){
+        .item-row,.rv-step,.project-head,.sub-row{flex-wrap:wrap}
+        .item-actions{flex:1 1 100%;justify-content:flex-end;flex-wrap:wrap;margin-top:6px}
+        .pipeline-row{flex-wrap:wrap}
+        .search-box{min-width:0;flex:1 1 100%}
+        .view-head{align-items:flex-start}
+        .today-stamp{text-align:left}
+        .pipeline-head{flex-wrap:wrap;gap:4px 10px}
+        .pipeline-head .view-sub{flex:1 1 220px;margin-top:0}
+        .habit-strip-head{flex-wrap:wrap;gap:8px}
+        .sub-add{flex-wrap:wrap}
+        .sub-add input{flex:1 1 100%}
+        .frow2{grid-template-columns:minmax(0,1fr);gap:2px}
+        /* The two periods sit side by side; the sentence they were joined into
+           ("Compare X with Y") does not survive a 414px line, and the table
+           headers name both periods anyway. */
+        .cmp-bar .cmp-word{display:none}
+        .cmp-bar>select{flex:1 1 calc(50% - 4px);min-width:0}
+        .cmp-bar>select.cmp-domain{flex:1 1 100%}
+      }
+
+      /* The habit grid needs about 730px to keep a name, seven days, a streak and
+         six tools on one line — more than a phone has in either orientation, and
+         more than a tablet has beside the sidebar. Below that it becomes three
+         lines: the name, then the streak and the row's tools, then the seven days,
+         each day getting a full-width share instead of twenty squeezed pixels. */
+      @media (max-width:1024px){
+        .habit-row{flex-wrap:wrap;gap:6px 10px;padding:12px 0}
+        .habit-name{width:auto;flex:1 1 100%;min-width:0;white-space:normal}
+        .habit-streak{width:auto;flex:0 0 auto;order:2;text-align:left}
+        .habit-row .row-tools{order:2;margin-left:auto}
+        .habit-row>.icon-btn{order:2}
+        /* Capped so the week does not sprawl across a tablet-width card. */
+        .habit-days{flex:1 1 100%;order:3;gap:4px;max-width:520px}
+        .day-dot{width:34px;height:34px}
+      }
+
+      /* Touch: a 26px target is a miss waiting to happen. */
+      @media (pointer:coarse){
+        .btn{padding:10px 16px}
+        .btn-sm{padding:8px 12px}
+        .icon-btn{width:38px;height:38px}
+        .row-tools .icon-btn{width:34px;height:34px;padding:0}
+        .check{width:24px;height:24px}
+        .rv-step .box{width:24px;height:24px}
+        .drag-handle{width:34px;height:34px}
+        .chip{padding:7px 12px}
+        .nav-item{padding:12px 10px}
+        .modal-actions .btn,.triage-actions .btn{min-height:44px}
       }
     </style>
   </head>
@@ -848,7 +972,8 @@ function pushToast(msg, big){
    ========================================================= */
 const ui = {
   view: 'now',              // now | inbox | projects | habits | followups
-  sidebarCollapsed: false,
+  sidebarCollapsed: false,   // desktop: collapse the sidebar to an icon rail
+  navOpen: false,            // phone: the nav drawer is slid in over the page
   processInbox: false,
   triageIndex: 0,
   triageSkipped: [],        // ids set aside during this pass through the Inbox
@@ -1724,10 +1849,12 @@ function renderSidebar(){
       ${badge?`<span class="nav-badge">${badge}</span>`:''}
     </a>`;
   return `
-  <div class="sidebar ${collapsed?'collapsed':''}">
+  <div class="nav-scrim ${ui.navOpen?'on':''}" data-action="close-nav"></div>
+  <div class="sidebar ${collapsed?'collapsed':''} ${ui.navOpen?'open':''}">
     <div class="sb-head">
       <div class="sb-brand"><span class="dot"></span><span>Second Brain</span></div>
       <button class="sb-toggle" data-action="toggle-sidebar" title="Toggle sidebar">${collapsed?'»':'«'}</button>
+      <button class="sb-close" data-action="close-nav" title="Close menu" aria-label="Close menu">✕</button>
     </div>
     ${navItem('inbox', icon('inbox'), 'Inbox', inboxCount||'')}
     ${navItem('now', icon('now'), 'Now / Today')}
@@ -1777,6 +1904,9 @@ function renderTopbar(){
   const streak = dayStreak();
   return `
   <div class="topbar">
+    <button class="icon-btn nav-btn" data-action="toggle-nav" title="Menu" aria-label="Menu">
+      <svg viewBox="0 0 24 24" fill="none" style="width:20px;height:20px"><path d="M4 7h16M4 12h16M4 17h16" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></svg>
+    </button>
     <div class="xp-block">
       <div class="xp-level">${level}</div>
       <div class="xp-mid">
@@ -1784,7 +1914,7 @@ function renderTopbar(){
         <div class="xp-bar"><div class="xp-bar-fill" style="width:${Math.min(100,into/need*100)}%"></div></div>
       </div>
     </div>
-    <div class="streak-chip">🔥 ${streak} Day${streak===1?'':'s'}</div>
+    <div class="streak-chip">🔥 ${streak}<span class="streak-word"> Day${streak===1?'':'s'}</span></div>
     <div class="topbar-actions">
       <button class="icon-btn" data-action="process-inbox" title="Process Inbox">${icon('inbox')}</button>
     </div>
@@ -2279,11 +2409,13 @@ function renderProjectBody(p, children){
           ${numLabel(si)}
           <button class="check ${s.done?'done':''}" style="width:17px;height:17px" data-action="toggle-subtask" data-id="${p.id}" data-sub="${s.id}">${checkSvg()}</button>
           ${effortChip(s.effort, `data-id="${p.id}" data-sub="${s.id}"`)}
-          <span style="flex:1;min-width:0;${s.done?'text-decoration:line-through;color:var(--c-text-muted)':''}">${esc(s.title)}</span>
-          ${moveTools('move-subtask', p.id, si, p.subtasks.length, `data-id="${p.id}"`, p.id)}
-          ${pinButton(msRef(p.id, s.id))}
-          <button class="icon-btn btn-sm" data-action="rename-subtask" data-id="${p.id}" data-sub="${s.id}" title="Rename milestone">✎</button>
-          <button class="icon-btn btn-sm btn-danger" data-action="delete-subtask" data-id="${p.id}" data-sub="${s.id}" title="Delete milestone">✕</button>
+          <span class="sub-title" style="${s.done?'text-decoration:line-through;color:var(--c-text-muted)':''}">${esc(s.title)}</span>
+          <div class="item-actions">
+            ${moveTools('move-subtask', p.id, si, p.subtasks.length, `data-id="${p.id}"`, p.id)}
+            ${pinButton(msRef(p.id, s.id))}
+            <button class="icon-btn btn-sm" data-action="rename-subtask" data-id="${p.id}" data-sub="${s.id}" title="Rename milestone">✎</button>
+            <button class="icon-btn btn-sm btn-danger" data-action="delete-subtask" data-id="${p.id}" data-sub="${s.id}" title="Delete milestone">✕</button>
+          </div>
         </div>`).join('') || `<div class="view-sub">No milestones yet.</div>`}
       <div class="sub-add">
         <input type="text" placeholder="Add a milestone…" data-role="new-sub" data-id="${p.id}" data-action-enter="add-subtask" />
@@ -2952,12 +3084,12 @@ function renderReportsCompareView(){
       <div class="chip-row" style="margin-bottom:10px">
         ${Object.keys(PERIODS).map(k=>`<button class="chip ${gran===k?'on':''}" data-action="compare-gran" data-gran="${k}">${PERIODS[k].label}</button>`).join('')}
       </div>
-      <div class="filter-bar" style="margin-bottom:0">
-        <span class="view-sub" style="margin:0;align-self:center">Compare</span>
+      <div class="filter-bar cmp-bar" style="margin-bottom:0">
+        <span class="view-sub cmp-word" style="margin:0;align-self:center">Compare</span>
         <select data-action-change="compare-base" style="${sel}">${periodOptions(ui.compareBase)}</select>
-        <span class="view-sub" style="margin:0;align-self:center">with</span>
+        <span class="view-sub cmp-word" style="margin:0;align-self:center">with</span>
         <select data-action-change="compare-vs" style="${sel}">${periodOptions(ui.compareVs)}</select>
-        <select data-action-change="compare-domain" style="${sel}">
+        <select class="cmp-domain" data-action-change="compare-domain" style="${sel}">
           <option value="all" ${domain==='all'?'selected':''}>All areas</option>
           ${doms.map(n=>`<option value="${esc(n)}" ${domain===n?'selected':''}>${esc(n)}</option>`).join('')}
         </select>
@@ -3561,9 +3693,9 @@ function modalAreaDetail(area){
     <div class="section-label">Framework <span style="float:right;font-weight:500;text-transform:none;letter-spacing:0;color:var(--c-text-muted)">${(area.framework||[]).length} threads</span></div>
     <ul style="margin:0 0 14px 18px;padding:0">${(area.framework||[]).map(f=>`<li style="font-size:13.5px;margin-bottom:4px">${esc(f)}</li>`).join('') || '<li class="view-sub">None yet.</li>'}</ul>
     <div class="section-label">Routines</div>
-    <table class="area-routines"><tr><th>Cadence</th><th>Action</th><th>Anchor</th></tr>
+    <div class="mini-table-wrap"><table class="area-routines"><tr><th>Cadence</th><th>Action</th><th>Anchor</th></tr>
     ${(area.routines||[]).map(r=>`<tr><td style="font-weight:600;color:var(--c-focus);white-space:nowrap">${esc(r.cadence)}</td><td>${esc(r.action)}</td><td style="color:var(--c-text-secondary)">${esc(r.anchor)}</td></tr>`).join('') || '<tr><td colspan="3" class="view-sub">No routines yet.</td></tr>'}
-    </table>
+    </table></div>
     <div class="modal-actions">
       <button class="btn btn-danger" data-action="delete-area" data-area="${esc(area.name)}">Delete area</button>
       <button class="btn" data-action="edit-area" data-area="${esc(area.name)}">Edit</button>
@@ -4654,7 +4786,9 @@ function handleAction(action, el){
   const item = id ? byId(id) : null;
 
   switch(action){
-    case 'nav': ui.view = el.getAttribute('data-view'); ui.processInbox=false; render(); break;
+    case 'nav': ui.view = el.getAttribute('data-view'); ui.processInbox=false; ui.navOpen=false; render(); break;
+    case 'toggle-nav': ui.navOpen = !ui.navOpen; render(); break;
+    case 'close-nav': ui.navOpen = false; render(); break;
     case 'toggle-sidebar': ui.sidebarCollapsed = !ui.sidebarCollapsed; render(); break;
     case 'toggle-numbering': state.state.settings.numberLists = !numbersOn(); persist(); break;
     case 'toggle-theme':
