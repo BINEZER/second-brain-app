@@ -714,6 +714,19 @@ function fmtDue(iso){
   if(diff<7) return 'in '+diff+'d';
   return d.toLocaleDateString(undefined,{month:'short',day:'numeric'});
 }
+/* "when did that happen" in the fewest words that are still exact enough. */
+function fmtWhen(iso){
+  if(!iso) return 'never';
+  const d = new Date(iso);
+  if(isNaN(d)) return 'never';
+  const mins = Math.round((Date.now()-d)/60000);
+  if(mins < 1) return 'just now';
+  if(mins < 60) return mins+' min ago';
+  if(mins < 60*24 && d.toDateString()===new Date().toDateString())
+    return 'today at ' + d.toLocaleTimeString(undefined,{hour:'numeric',minute:'2-digit'});
+  return d.toLocaleDateString(undefined,{day:'numeric',month:'short'})
+       + ' at ' + d.toLocaleTimeString(undefined,{hour:'numeric',minute:'2-digit'});
+}
 function isOverdue(item){
   if(!item.dueDate || item.status==='done') return false;
   return item.dueDate < todayISO();
@@ -859,13 +872,124 @@ function migrateAreasIfNeeded(){
   }).catch(()=>{});
 }
 
-const persistLocal = ()=>{ try{ localStorage.setItem(STATE_KEY, JSON.stringify(state)); }catch(e){} };
+/* =========================================================
+   Cross-device sync
+
+   The old rule was: pull the cloud copy only on a device's very first visit,
+   and on every visit after that push whatever is in this browser's storage.
+   A phone opened once in August therefore showed August forever — and worse,
+   uploaded August over the laptop's September. Whichever device was opened
+   last owned the data.
+
+   Now every device reads the cloud on every boot and the newer copy wins, in
+   both directions, with a live listener so a change made on the phone shows up
+   on the laptop without a reload.
+   ========================================================= */
+const DEVICE_KEY = 'sb-device-v1';
+const BACKUP_KEY = STATE_KEY + '-backup';
+
+function deviceName(){
+  const ua = (typeof navigator!=='undefined' && navigator.userAgent) || '';
+  if(/iPad/i.test(ua)) return 'iPad';
+  if(/iPhone/i.test(ua)) return 'iPhone';
+  if(/Android/i.test(ua)) return /Mobile/i.test(ua) ? 'Android phone' : 'Android tablet';
+  if(/Macintosh|Mac OS X/i.test(ua)) return 'Mac';
+  if(/Windows/i.test(ua)) return 'Windows PC';
+  return 'This device';
+}
+const DEVICE_NAME = deviceName();
+const DEVICE_ID = (function(){
+  let id=null; try{ id = localStorage.getItem(DEVICE_KEY); }catch(e){}
+  if(!id){ id = DEVICE_NAME.replace(/\s+/g,'-') + '-' + uid().slice(0,6);
+    try{ localStorage.setItem(DEVICE_KEY, id); }catch(e){} }
+  return id;
+})();
+
+/* The last moment real work happened inside a snapshot. This is the honest
+   answer to "which of these two copies is further along", and the only answer
+   available for data saved before this version started stamping its saves. */
+function lastActivityAt(root){
+  const st = root && root.state;
+  if(!st) return '';
+  let max = '';
+  const bump = v => { if(typeof v==='string' && v>max) max = v; };
+  (st.items||[]).forEach(it=>{
+    bump(it.createdAt); bump(it.completedAt);
+    (it.subtasks||[]).forEach(sx=>bump(sx.doneAt));
+  });
+  (st.habits||[]).forEach(h=>Object.keys(h.log||{}).forEach(bump));
+  (st.recurring||[]).forEach(r=>bump(r.createdAt));
+  return max;
+}
+
+function freshness(root){
+  const m = root && root.meta;
+  return { savedAt: (m && m.savedAt) || '', activity: lastActivityAt(root) };
+}
+
+/* Stamped saves are compared directly. A copy written before this version has
+   no stamp, so it is judged by its own newest activity instead. On a true tie
+   nothing is adopted: what is in front of you stays. */
+function cloudIsNewer(localRoot, cloudRoot){
+  const mine = freshness(localRoot), theirs = freshness(cloudRoot);
+  if(mine.savedAt && theirs.savedAt) return theirs.savedAt > mine.savedAt;
+  return theirs.activity > mine.activity;
+}
+
+/* Timestamps alone are not enough. A phone that has not synced since August can
+   be opened today and tick one thing, which makes it the most recently touched
+   copy while still being months behind — and a rule that only read the clock
+   would let it roll the laptop back.
+
+   XP is the one number in this app that only ever goes up: it is granted on
+   completion and never taken away, and the only thing that zeroes it is a reset,
+   which clears the cloud copy too. So less XP means strictly further behind,
+   whatever the clock says. */
+function knowsLess(candidate, against){
+  const a = ((candidate && candidate.state) || {}).gamification || {};
+  const b = ((against && against.state) || {}).gamification || {};
+  return (a.xp||0) < (b.xp||0);
+}
+
+function pickCloud(localRoot, cloudRoot){
+  if(knowsLess(cloudRoot, localRoot)) return false;   // the cloud is behind — keep ours
+  if(knowsLess(localRoot, cloudRoot)) return true;    // we are behind — take theirs
+  return cloudIsNewer(localRoot, cloudRoot);          // level pegging: newer wins
+}
+
+function adoptCloud(cloudRoot, note){
+  // Keep the copy being replaced. Nothing in the app reads it, but it means a
+  // bad merge is recoverable rather than gone.
+  try{ localStorage.setItem(BACKUP_KEY, localStorage.getItem(STATE_KEY)||''); }catch(e){}
+  try{ localStorage.setItem(STATE_KEY, JSON.stringify(cloudRoot)); }catch(e){}
+  state = loadRoot();
+  // Materialising recurring tasks re-stamps the save as ours, so when it creates
+  // anything the cloud needs it too; when it creates nothing the adopted stamp is
+  // left alone and this device does not look newer than what it just accepted.
+  const made = catchUpRecurring();
+  if(made && made.created) cloudPushDebounced();
+  sync.lastPull = new Date().toISOString();
+  sync.from = (cloudRoot.meta && cloudRoot.meta.name) || 'another device';
+  render();
+  pushToast(note || `↻ Updated from your ${sync.from}`);
+}
+
+// What the Settings panel reports, so "is this thing actually syncing?" has an answer.
+const sync = { lastPull:null, lastPush:null, from:null, error:null, watching:false };
+
+const persistLocal = ()=>{
+  // Every save carries who saved it and when, which is what lets two devices
+  // agree on which copy is newer without guessing.
+  state.meta = { savedAt: new Date().toISOString(), device: DEVICE_ID, name: DEVICE_NAME };
+  try{ localStorage.setItem(STATE_KEY, JSON.stringify(state)); }catch(e){}
+};
 const cloudPushDebounced = debounce(()=>{
-  if(typeof db==='undefined'){ pushToast('⚠️ Could not reach cloud — using local data'); return; }
+  if(typeof db==='undefined'){ sync.error='offline'; pushToast('⚠️ Could not reach cloud — using local data'); return; }
   try{
     db.collection('snapshots').doc('primary').set({
       data: state, updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-    }).catch(()=>{ pushToast('⚠️ Sync failed — changes saved locally only'); });
+    }).then(()=>{ sync.lastPush = new Date().toISOString(); sync.error = null; })
+      .catch(()=>{ sync.error='push'; pushToast('⚠️ Sync failed — changes saved locally only'); });
   }catch(e){}
 }, 1200);
 
@@ -3282,6 +3406,23 @@ function renderSettingsView(){
       </div>
       <button class="btn" data-action="toggle-numbering">${numbersOn()?'Turn off':'Turn on'}</button>
     </div>
+    <div class="section-label">Sync</div>
+    <div class="card" style="margin-bottom:22px">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
+        <div>
+          <div style="font-weight:600;font-size:14.5px">${esc(DEVICE_NAME)}${sync.watching?' · live':''}</div>
+          <div class="view-sub" style="margin-top:2px">
+            Saved here ${fmtWhen(state.meta && state.meta.savedAt)}${sync.lastPush? ` · sent to the cloud ${fmtWhen(sync.lastPush)}`:''}${sync.lastPull? ` · read from the cloud ${fmtWhen(sync.lastPull)}`:''}.
+          </div>
+        </div>
+        <button class="btn" data-action="sync-now">Sync now</button>
+      </div>
+      <div class="view-sub" style="margin-top:10px">
+        ${sync.error==='offline' ? 'Offline — changes are saved on this device and will go up when it reconnects.'
+          : sync.error ? 'The last attempt to reach the cloud failed. Changes are safe on this device.'
+          : 'Your devices read each other on every open, and the newer copy wins. Changes made elsewhere arrive here while the app is open.'}
+      </div>
+    </div>
     <div class="section-label">Import</div>
     <div class="card" style="margin-bottom:22px">
       <div style="font-weight:600;font-size:14.5px">Bulk import</div>
@@ -4790,6 +4931,7 @@ function handleAction(action, el){
     case 'toggle-nav': ui.navOpen = !ui.navOpen; render(); break;
     case 'close-nav': ui.navOpen = false; render(); break;
     case 'toggle-sidebar': ui.sidebarCollapsed = !ui.sidebarCollapsed; render(); break;
+    case 'sync-now': syncNow().then(()=>{ if(!sync.error) pushToast('↻ In sync'); render(); }); break;
     case 'toggle-numbering': state.state.settings.numberLists = !numbersOn(); persist(); break;
     case 'toggle-theme':
       state.state.settings.themeMode = state.state.settings.themeMode==='dark' ? 'light':'dark';
@@ -5399,28 +5541,60 @@ function handleAction(action, el){
 /* =========================================================
    Boot
    ========================================================= */
+/* Read the cloud, then let the newer copy win — in whichever direction that is.
+   Runs on every boot and again whenever "Sync now" is pressed. */
+function syncNow(){
+  if(typeof db==='undefined'){ sync.error='offline'; pushToast('⚠️ Could not reach cloud — using local data'); return Promise.resolve(); }
+  return db.collection('snapshots').doc('primary').get()
+    .then(snap=>{
+      const cloud = snap.exists && snap.data().data;
+      sync.error = null;
+      if(!cloud || !cloud.state){ cloudPushDebounced(); return; }   // nothing up there yet
+      if(pickCloud(state, cloud)) adoptCloud(cloud);
+      else { sync.lastPull = new Date().toISOString(); cloudPushDebounced(); }
+    })
+    .catch(()=>{ sync.error='pull'; pushToast('⚠️ Could not reach cloud — using local data'); });
+}
+
+/* Live sync. Without this, two devices only agree at boot — tick something on
+   the phone and the laptop sitting open beside it goes on showing yesterday. */
+function watchCloud(){
+  if(typeof db==='undefined' || sync.watching) return;
+  sync.watching = true;
+  db.collection('snapshots').doc('primary').onSnapshot(snap=>{
+    if(snap.metadata && snap.metadata.hasPendingWrites) return;      // our own write echoing back
+    const cloud = snap.exists && snap.data().data;
+    if(!cloud || !cloud.state) return;
+    if(cloud.meta && cloud.meta.device === DEVICE_ID) return;        // this device already has it
+    if(!pickCloud(state, cloud)) return;
+    adoptCloud(cloud);
+  }, ()=>{ sync.watching = false; });
+
+  if(window.SB_LB && window.SB_LB.watch) window.SB_LB.watch(areas=>{
+    if(Array.isArray(areas) && areas.length) state.state.lifeAreas = JSON.parse(JSON.stringify(areas));
+    render();
+  });
+
+  db.collection('snapshots').doc('project-flags').onSnapshot(snap=>{
+    if(snap.metadata && snap.metadata.hasPendingWrites) return;
+    const cloud = snap.exists && snap.data().data && snap.data().data.inactive;
+    if(!Array.isArray(cloud) || cloud.join('|')===inactiveProjects.join('|')) return;
+    inactiveProjects = cloud;
+    try{ localStorage.setItem(INACTIVE_KEY, JSON.stringify(cloud)); }catch(e){}
+    render();
+  }, ()=>{});
+}
+
 function boot(){
-  const hadLocal = !!localStorage.getItem(STATE_KEY);
   state = loadRoot();
   inactiveProjects = loadInactive();
   catchUpRecurring();
   render();
   scheduleMidnightRollover();
 
-  if(typeof db==='undefined'){ pushToast('⚠️ Could not reach cloud — using local data'); migrateAreasIfNeeded(); return; }
+  if(typeof db==='undefined'){ sync.error='offline'; pushToast('⚠️ Could not reach cloud — using local data'); migrateAreasIfNeeded(); return; }
 
-  let primaryPull;
-  if(!hadLocal){
-    primaryPull = db.collection('snapshots').doc('primary').get()
-      .then(snap=>{
-        const cloud = snap.exists && snap.data().data;
-        if(cloud && cloud.state){ localStorage.setItem(STATE_KEY, JSON.stringify(cloud)); state = loadRoot(); catchUpRecurring(); render(); }
-      }).catch(()=>{ pushToast('⚠️ Could not reach cloud — using local data'); });
-  } else {
-    cloudPushDebounced();
-    primaryPull = Promise.resolve();
-  }
-  primaryPull.then(migrateAreasIfNeeded);
+  syncNow().then(migrateAreasIfNeeded).then(watchCloud);
 
   db.collection('snapshots').doc('project-flags').get()
     .then(snap=>{

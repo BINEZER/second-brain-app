@@ -19,6 +19,19 @@ window.SB_LB=(function(){
     areas:function(){return areas||fromCache()||window.LB_SEED},
     get:function(){var a=this.areas(),out=[];for(var i=0;i<a.length;i++){var oi=a[i].open_items||[];for(var j=0;j<oi.length;j++)out.push({area:a[i].name,text:oi[j]})}return out},
     save:function(next){areas=next;cache();return push()},
+    /* Live updates, so a binder edited on the laptop reaches the phone without
+       either of them being reopened. */
+    watch:function(cb){
+      try{
+        return db.collection('snapshots').doc('life-binder').onSnapshot(function(snap){
+          if(snap.metadata&&snap.metadata.hasPendingWrites)return;
+          var d=snap.exists&&snap.data().data&&snap.data().data.areas;
+          if(!Array.isArray(d)||!d.length)return;
+          if(JSON.stringify(d)===JSON.stringify(areas))return;
+          areas=d;cache();if(cb)cb(d);
+        },function(){});
+      }catch(e){}
+    },
     clear:function(){
       areas=null; loaded=false;
       try{ localStorage.removeItem(KEY); }catch(e){}
