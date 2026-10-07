@@ -326,5 +326,25 @@ catch(e){ ok('the Compare tab renders', false, e.message); }
 ok('  and names both periods', renderReportsCompareView().includes(periodWindow('month',-1).label));
 __in('ui').reportsTab = 'areas';
 
+/* ---------- 9. what a save must survive ----------
+   Now once had three slots, and loadRoot went on enforcing them long after the
+   view stopped doing so: a fourth pin lived until the next load and then
+   vanished. Across two devices that reads as "my phone's Now list is wrong" —
+   the one that reloaded showed three, the one still open showed four. */
+reset();
+(function(){
+  const root = JSON.parse(JSON.stringify(__in('defaultRoot')()));
+  root.state.settings.nowPins = ['a','b','c','d','e'];
+  root.state.settings.inactiveProjects = ['p1','p2'];
+  localStorage.setItem('adhd-second-brain-v1', JSON.stringify(root));
+  const back = __in('loadRoot')();
+  // eq here is identity, so compare these lists by value.
+  const same = (name,a,b)=>eq(name, JSON.stringify(a), JSON.stringify(b));
+  same('every Now pin survives a load, not just the first three', back.state.settings.nowPins, ['a','b','c','d','e']);
+  // Archived projects ride the one snapshot now, so they cannot drift from it.
+  same('the archive list rides the snapshot', back.state.settings.inactiveProjects, ['p1','p2']);
+  same('a fresh install starts with an empty archive list', __in('defaultRoot')().state.settings.inactiveProjects, []);
+})();
+
 console.log(`analytics: ${passes} passed, ${fails} failed`);
 process.exit(fails?1:0);

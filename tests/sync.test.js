@@ -254,6 +254,62 @@ function snapshot({ xp, at, stamped, device, title }) {
   await phone.page.waitForTimeout(400);
   ok('  and shows it on screen', /Booked the crane/.test(await phone.page.locator('.view').innerText()));
 
+  console.log('\nTHE NOW LIST IS THE SAME LIST ON BOTH');
+  /* Now pins and the archive list the Up next pipeline reads both have to cross.
+     The pins used to be truncated to three on load, and the archive list lived in
+     a second document with its own rules, so two devices could agree on
+     everything else and still show a different Now. */
+  await laptop.page.evaluate(() => {
+    ['Call the bank', 'Draft the SOP', 'Book the crane slot', 'Review the export file']
+      .forEach(t => newItem({ type: 'task', title: t, category: 'Operations' }));
+    newItem({ type: 'project', title: 'Export licence', category: 'Operations' });
+    const p = nowPins();
+    p.length = 0;
+    items().filter(i => i.type === 'task' && i.status !== 'done').slice(0, 4).forEach(i => p.push(i.id));
+    persist();
+  });
+  await laptop.page.waitForTimeout(2600);
+  const pinsOn = page => page.evaluate(() => {
+    const t = JSON.parse(localStorage.getItem('adhd-second-brain-v1'));
+    return t.state.settings.nowPins;
+  });
+  const laptopPins = await pinsOn(laptop.page);
+  ok('four pins stay four on the device that set them', laptopPins.length === 4, laptopPins);
+  const phonePins = await pinsOn(phone.page);
+  ok('  and arrive whole on the other one', JSON.stringify(phonePins) === JSON.stringify(laptopPins), { phonePins, laptopPins });
+  await phone.page.click('[data-action="nav"][data-view="now"]');
+  await phone.page.waitForTimeout(400);
+  const shown = await phone.page.locator('.focus-card').count();
+  ok('  and all four are on screen, not three', shown === 4, shown);
+
+  // Archiving a project changes what Up next offers, so it has to cross too.
+  await laptop.page.evaluate(() => {
+    const p = projects()[0];
+    if (p) toggleInactive(p.id);
+  });
+  await laptop.page.waitForTimeout(2600);
+  const archivedOn = page => page.evaluate(() => {
+    const t = JSON.parse(localStorage.getItem('adhd-second-brain-v1'));
+    return t.state.settings.inactiveProjects || [];
+  });
+  const la = await archivedOn(laptop.page), pa = await archivedOn(phone.page);
+  ok('archiving a project reaches the other device', la.length === 1 && JSON.stringify(pa) === JSON.stringify(la), { la, pa });
+
+  console.log('\nCOMING BACK TO A BACKGROUNDED PHONE RE-READS THE CLOUD');
+  /* A phone spends most of its life with this page in the background, where the
+     live connection is suspended — and that is exactly when a stale list gets
+     noticed. Returning to the app must go and look again. */
+  await phone.page.evaluate(() => { window.__syncs = 0; const real = syncNow; window.syncNow = () => { window.__syncs++; return real(); }; });
+  await laptop.page.evaluate(() => { newItem({ type:'task', title:'Added while the phone was away', category:'Operations' }); persist(); });
+  await laptop.page.waitForTimeout(1800);
+  await phone.page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+  await phone.page.waitForTimeout(1200);
+  const seen = await phone.page.evaluate(() => {
+    const t = JSON.parse(localStorage.getItem('adhd-second-brain-v1'));
+    return t.state.items.map(i => i.title);
+  });
+  ok('returning to the app picks up what it missed', seen.includes('Added while the phone was away'), seen.slice(-3));
+
   console.log('\nTHE SETTINGS PANEL SAYS WHAT IS GOING ON');
   await phone.page.click('[data-action="nav"][data-view="settings"]');
   await phone.page.waitForTimeout(400);
