@@ -755,7 +755,7 @@ function defaultRoot(){
     version: 1,
     state: {
       items: [],
-      settings: { nowPins: [], themeMode: matchMedia('(prefers-color-scheme: dark)').matches ? 'dark':'light' },
+      settings: { nowPins: [], inactiveProjects: [], themeMode: matchMedia('(prefers-color-scheme: dark)').matches ? 'dark':'light' },
       lifeAreas: [],
       habits: [],
       recurring: [],
@@ -798,7 +798,11 @@ function loadRoot(){
   });
   st.settings = st.settings || {};
   if(!Array.isArray(st.settings.nowPins)) st.settings.nowPins=[];
-  st.settings.nowPins = st.settings.nowPins.slice(0,3);
+  /* No cap. Now once had three slots and this line still enforced them, so a
+     fourth pin survived until the next load and then vanished — which on two
+     devices reads as "my phone's Now list is wrong": the one that reloaded
+     showed three, the one still open showed four. The view says three is what
+     usually survives a real day; it is advice, not a limit. */
   if(!st.settings.themeMode) st.settings.themeMode = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark':'light';
   if(typeof st.settings.numberLists!=='boolean') st.settings.numberLists = false;
   if(!Array.isArray(st.lifeAreas)) st.lifeAreas = [];
@@ -968,6 +972,7 @@ function adoptCloud(cloudRoot, note){
   // left alone and this device does not look newer than what it just accepted.
   const made = catchUpRecurring();
   if(made && made.created) cloudPushDebounced();
+  if(Array.isArray(state.state.settings.inactiveProjects)) inactiveProjects = state.state.settings.inactiveProjects;
   sync.lastPull = new Date().toISOString();
   sync.from = (cloudRoot.meta && cloudRoot.meta.name) || 'another device';
   render();
@@ -995,23 +1000,40 @@ const cloudPushDebounced = debounce(()=>{
 
 function persist(){ persistLocal(); cloudPushDebounced(); render(); }
 
+/* Which projects are archived used to live in its own cloud document, reconciled
+   by its own rule ("whatever is in the cloud wins at boot"). Two documents meant
+   two chances to disagree, and the Now pipeline reads this list — so a device
+   whose archive list was behind showed a different Up next than the one beside
+   it even when everything else matched. It now rides the one snapshot that is
+   already reconciled properly. */
 function loadInactive(){
   let ids; try{ ids=JSON.parse(localStorage.getItem(INACTIVE_KEY)||'[]'); }catch(e){ ids=[]; }
   return Array.isArray(ids)?ids:[];
 }
 function saveInactive(){
-  try{ localStorage.setItem(INACTIVE_KEY, JSON.stringify(inactiveProjects)); }catch(e){}
-  if(typeof db==='undefined'){ pushToast('⚠️ Could not reach cloud — using local data'); return; }
-  try{
-    db.collection('snapshots').doc('project-flags').set({
-      data: {inactive:inactiveProjects}, updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-    }).catch(()=>{ pushToast('⚠️ Sync failed — changes saved locally only'); });
-  }catch(e){}
+  state.state.settings.inactiveProjects = inactiveProjects;
+  persist();
 }
 function toggleInactive(projectId){
   const i=inactiveProjects.indexOf(projectId);
   if(i>=0) inactiveProjects.splice(i,1); else inactiveProjects.push(projectId);
-  saveInactive(); render();
+  saveInactive();
+}
+
+/* Read the archive list out of the snapshot, migrating it in the first time from
+   wherever it used to live. */
+function settleArchived(){
+  const st = state.state.settings;
+  if(Array.isArray(st.inactiveProjects)){ inactiveProjects = st.inactiveProjects; render(); return Promise.resolve(); }
+  const local = loadInactive();
+  const take = list => { inactiveProjects = list; st.inactiveProjects = list; persist(); };
+  if(typeof db==='undefined'){ take(local); return Promise.resolve(); }
+  return db.collection('snapshots').doc('project-flags').get()
+    .then(snap=>{
+      const cloud = snap.exists && snap.data().data && snap.data().data.inactive;
+      take(Array.isArray(cloud) ? cloud : local);
+    })
+    .catch(()=>take(local));
 }
 
 function resetApp(){
@@ -5574,34 +5596,31 @@ function watchCloud(){
     if(Array.isArray(areas) && areas.length) state.state.lifeAreas = JSON.parse(JSON.stringify(areas));
     render();
   });
+}
 
-  db.collection('snapshots').doc('project-flags').onSnapshot(snap=>{
-    if(snap.metadata && snap.metadata.hasPendingWrites) return;
-    const cloud = snap.exists && snap.data().data && snap.data().data.inactive;
-    if(!Array.isArray(cloud) || cloud.join('|')===inactiveProjects.join('|')) return;
-    inactiveProjects = cloud;
-    try{ localStorage.setItem(INACTIVE_KEY, JSON.stringify(cloud)); }catch(e){}
-    render();
-  }, ()=>{});
+/* A phone spends most of its life with this page in the background, where the
+   live connection is suspended; coming back to it is exactly when a stale list
+   is noticed. So re-read the cloud whenever the app returns to the foreground,
+   is restored from the back/forward cache, or comes back online. */
+function watchForeground(){
+  const back = () => { if(typeof db!=='undefined' && !document.hidden) syncNow(); };
+  document.addEventListener('visibilitychange', back);
+  window.addEventListener('pageshow', back);
+  window.addEventListener('online', back);
+  window.addEventListener('focus', back);
 }
 
 function boot(){
   state = loadRoot();
-  inactiveProjects = loadInactive();
+  inactiveProjects = Array.isArray(state.state.settings.inactiveProjects)
+    ? state.state.settings.inactiveProjects : loadInactive();
   catchUpRecurring();
   render();
   scheduleMidnightRollover();
 
-  if(typeof db==='undefined'){ sync.error='offline'; pushToast('⚠️ Could not reach cloud — using local data'); migrateAreasIfNeeded(); return; }
+  if(typeof db==='undefined'){ sync.error='offline'; pushToast('⚠️ Could not reach cloud — using local data'); settleArchived(); migrateAreasIfNeeded(); return; }
 
-  syncNow().then(migrateAreasIfNeeded).then(watchCloud);
-
-  db.collection('snapshots').doc('project-flags').get()
-    .then(snap=>{
-      const cloud = snap.exists && snap.data().data && snap.data().data.inactive;
-      if(Array.isArray(cloud)){ inactiveProjects = cloud; try{localStorage.setItem(INACTIVE_KEY, JSON.stringify(cloud));}catch(e){} render(); }
-      else if(inactiveProjects.length){ saveInactive(); }
-    }).catch(()=>{ pushToast('⚠️ Could not reach cloud — using local data'); });
+  syncNow().then(settleArchived).then(migrateAreasIfNeeded).then(watchCloud).then(watchForeground);
 }
 boot();
     </script>
