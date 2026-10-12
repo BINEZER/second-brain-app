@@ -336,6 +336,37 @@
       .triage-actions .btn{justify-content:center;padding:12px}
       .triage-actions .full{grid-column:1/-1}
 
+      /* The board: three columns on a desktop, stacked on a phone. */
+      .board{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+      .board-col{background:var(--c-surface);border:1px solid var(--c-border);border-radius:var(--radius-md);padding:10px}
+      .board-head{font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--c-text-muted);
+        display:flex;justify-content:space-between;gap:6px;margin-bottom:8px}
+      .story{border:1px solid var(--c-border);border-radius:10px;padding:8px 9px;margin-bottom:7px;background:var(--c-bg)}
+      .story-top{display:flex;gap:7px;align-items:flex-start}
+      .story-title{font-size:13px;min-width:0;word-break:break-word}
+      .story-title.done{text-decoration:line-through;color:var(--c-text-muted)}
+      .story-foot{display:flex;gap:3px;align-items:center;flex-wrap:wrap;margin-top:7px}
+      .story-foot .icon-btn{width:26px;height:26px;border-radius:7px;font-size:12px;padding:0}
+      .story-foot select{font-size:11px;padding:3px 5px;border-radius:7px;border:1px solid var(--c-border);
+        background:var(--c-surface);color:var(--c-text-secondary);max-width:110px}
+      .sprint-bar{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;
+        border:1px solid var(--c-border);border-radius:var(--radius-md);background:var(--c-surface);padding:10px 12px;margin-bottom:12px;font-size:13.5px}
+      @media (max-width:820px){ .board{grid-template-columns:minmax(0,1fr)} .story-foot select{max-width:none;flex:1 1 90px} }
+
+      /* Wins: a finished project should look finished, not like another row. */
+      .win-hero{display:flex;align-items:center;gap:18px}
+      .win-hero-n{font-family:'Space Grotesk',sans-serif;font-size:44px;font-weight:700;line-height:1;color:var(--c-good);flex-shrink:0}
+      .win-card{padding:14px 16px;border-left:3px solid var(--c-good)}
+      .win-top{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+      .win-mark{flex-shrink:0}
+      .win-title{font-size:14.5px;font-weight:600;min-width:0;word-break:break-word}
+      /* Twelve months of finishing, as a small bar strip. */
+      .spark{display:flex;align-items:flex-end;gap:6px;min-height:86px}
+      .spark-col{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;gap:4px;min-width:0}
+      .spark-bar{width:100%;max-width:26px;border-radius:4px 4px 0 0;background:var(--c-good)}
+      .spark-lbl{font-size:10px;color:var(--c-text-muted);font-weight:700}
+      .spark-n{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--c-text-secondary);min-height:14px}
+
       /* The portfolio tree: one row per item, indented by depth. */
       .tree-row{padding-top:10px;padding-bottom:10px;border-top:1px solid var(--c-border)}
       .tree-row:first-child{border-top:none}
@@ -479,6 +510,7 @@
 
       /* Touch: a 26px target is a miss waiting to happen. */
       @media (pointer:coarse){
+        .story-foot .icon-btn{width:32px;height:32px}
         .btn{padding:10px 16px}
         .btn-sm{padding:8px 12px}
         .icon-btn{width:38px;height:38px}
@@ -744,6 +776,26 @@ const RAID_STATES = { open:'Open', mitigating:'Being handled', closed:'Closed' }
 const RAID_SCALE = ['—','Very low','Low','Medium','High','Very high'];   // index 1–5
 
 /* =========================================================
+   How a project is run
+
+   Traditional is what this app has always done: a plan of milestones, each
+   sized S/M/L/XL. Agile replaces that plan with a backlog of items carrying
+   story points, worked through in sprints. Hybrid keeps the milestones and lets
+   any one of them be driven by the backlog items assigned to it — a build phase
+   tracked as phases, with the software inside it tracked as stories.
+
+   A project that never picks is traditional, and nothing about it changes.
+   ========================================================= */
+const METHODS = {
+  traditional: { label:'Traditional', sub:'A plan of milestones, each sized S/M/L/XL' },
+  agile:       { label:'Agile',       sub:'A backlog of items with points, worked in sprints' },
+  hybrid:      { label:'Hybrid',      sub:'Milestones, where one can be driven by its backlog' }
+};
+const STORY_STATES = { todo:'To do', doing:'Doing', done:'Done' };
+const STORY_POINTS = [1,2,3,5,8,13];        // the usual ladder; click a chip to step it
+const SPRINT_DAYS = 14;
+
+/* =========================================================
    Small utilities
    ========================================================= */
 function uid(){
@@ -847,6 +899,9 @@ function loadRoot(){
       // phase, a licence application) can report how far through it is instead.
       s.pct = (typeof s.pct==='number' && s.pct>0 && s.pct<100) ? Math.round(s.pct) : null;
       if(s.done) s.pct = null;
+      // Hybrid: 'backlog' means this milestone's progress is whatever the backlog
+      // items assigned to it add up to, rather than a tick or a typed figure.
+      if(s.source!=='backlog') s.source = 'manual';
     });
     if(it.isStarred==null) it.isStarred=false;
     if(it.xpAwarded==null) it.xpAwarded = (it.status==='done'); // don't retro-award xp for legacy completed items
@@ -878,6 +933,26 @@ function loadRoot(){
         if(typeof r.title!=='string') r.title='';
         if(typeof r.owner!=='string') r.owner='';
         if(typeof r.response!=='string') r.response='';
+      });
+      if(!METHODS[it.method]) it.method = 'traditional';
+      if(!Array.isArray(it.backlog)) it.backlog = [];
+      it.backlog.forEach(b=>{
+        if(!b.id) b.id=uid();
+        if(typeof b.title!=='string') b.title='';
+        b.points = (typeof b.points==='number' && b.points>=0) ? b.points : 1;
+        if(!STORY_STATES[b.status]) b.status='todo';
+        if(b.sprintId===undefined) b.sprintId = null;
+        if(b.stageId===undefined) b.stageId = null;
+        if(b.doneAt===undefined) b.doneAt = null;
+        if(b.status!=='done') b.doneAt = null;
+      });
+      if(!Array.isArray(it.sprints)) it.sprints = [];
+      it.sprints.forEach(sp=>{
+        if(!sp.id) sp.id=uid();
+        if(typeof sp.name!=='string' || !sp.name) sp.name='Sprint';
+        if(typeof sp.goal!=='string') sp.goal='';
+        if(!/^\d{4}-\d{2}-\d{2}$/.test(sp.start||'')) sp.start = todayISO();
+        if(!/^\d{4}-\d{2}-\d{2}$/.test(sp.end||'')) sp.end = fmtISO(addDays(new Date(sp.start+'T00:00:00'), SPRINT_DAYS-1));
       });
       if(!Array.isArray(it.log)) it.log = [];
       it.log.forEach(l=>{ if(!l.id) l.id=uid(); if(typeof l.text!=='string') l.text=''; if(!l.at) l.at=it.createdAt||new Date().toISOString(); });
@@ -1246,6 +1321,8 @@ const ui = {
   compareVs: 0,               // period offset on the right
   compareDomain: null,        // null = all areas
   recurringFilter: 'all',     // all | tasks | chores — Recurring view
+  boardSprint: {},            // project id -> which sprint the board is filtered to
+  winsRange: 'year',          // which period the Wins tab reports on
   bragRange: 'month',         // week | month | quarter | year | all — brag file period
   bragDomain: null,           // null = pick the day-job domain automatically
   reviewTab: 'daily',         // daily | weekly | monthly
@@ -1295,14 +1372,20 @@ function projectsForPerson(name){
 }
 function worksForPerson(name){ return tasksForPerson(name).length + projectsForPerson(name).length; }
 /* Everyone the app knows about: task owners and tracked contacts, merged. */
+function riskOwners(){
+  const out = [];
+  projects().forEach(p=>(p.risks||[]).forEach(r=>{ if(r.status!=='closed' && r.owner) out.push(r.owner); }));
+  return out;
+}
 function knownPeople(){
   const seen = new Map();
+  const add = n => { const k = normPerson(n); if(k && !seen.has(k)) seen.set(k, String(n).trim()); };
   items().forEach(i=>{
-    [i.assignee, i.type==='followup' ? (i.contactName||i.title) : null].forEach(n=>{
-      const k = normPerson(n);
-      if(k && !seen.has(k)) seen.set(k, String(n).trim());
-    });
+    add(i.assignee);
+    if(i.type==='followup') add(i.contactName||i.title);
   });
+  // Whoever owns a live risk is someone you are waiting on, same as an assignee.
+  riskOwners().forEach(add);
   return Array.from(seen.values()).sort((a,b)=>a.localeCompare(b));
 }
 function nowPins(){ return state.state.settings.nowPins; }
@@ -1575,12 +1658,87 @@ function endOfDayMs(dateISO){ const t = Date.parse(dateISO+'T23:59:59'); return 
 function clampPct(n){ return Math.max(0, Math.min(100, n)); }
 
 /* Every countable unit of a project: its milestones plus its child tasks. */
+/* =========================================================
+   Agile: backlog, sprints, burndown, velocity
+   ========================================================= */
+function backlogOf(p){ return p.backlog || []; }
+function sprintsOf(p){ return (p.sprints||[]).slice().sort((a,b)=>a.start.localeCompare(b.start)); }
+function storyPoints(b){ return Math.max(0, b.points||0); }
+
+/* Share of the work done, 0–100. By points when anything is estimated, by head
+   count when nothing is — an unestimated backlog still deserves a number. */
+function backlogProgress(list){
+  if(!list.length) return 0;
+  const total = list.reduce((a,b)=>a+storyPoints(b), 0);
+  if(!total) return list.filter(b=>b.status==='done').length / list.length * 100;
+  return list.filter(b=>b.status==='done').reduce((a,b)=>a+storyPoints(b), 0) / total * 100;
+}
+function stageBacklog(p, stageId){ return backlogOf(p).filter(b=>b.stageId===stageId); }
+
+/* The sprint you are in, else the last one that started, else the first planned. */
+function activeSprint(p){
+  const list = sprintsOf(p);
+  if(!list.length) return null;
+  const t = todayISO();
+  return list.find(sp=>sp.start<=t && t<=sp.end)
+      || list.slice().reverse().find(sp=>sp.start<=t)
+      || list[0];
+}
+function sprintTally(p, sprintId){
+  const list = backlogOf(p).filter(b=>b.sprintId===sprintId);
+  return {
+    items: list.length,
+    total: list.reduce((a,b)=>a+storyPoints(b), 0),
+    done: list.filter(b=>b.status==='done').reduce((a,b)=>a+storyPoints(b), 0)
+  };
+}
+/* Points finished in each sprint that has started — the velocity bar chart. */
+function velocity(p){
+  return sprintsOf(p).filter(sp=>sp.start<=todayISO())
+    .map(sp=>({ sprint: sp, done: sprintTally(p, sp.id).done }));
+}
+/* Points left day by day against the straight line from full to empty. Days that
+   have not happened yet have no actual, so the line stops at today. */
+function burndown(p, sprint){
+  const list = backlogOf(p).filter(b=>b.sprintId===sprint.id);
+  const total = list.reduce((a,b)=>a+storyPoints(b), 0);
+  const startMs = Date.parse(sprint.start+'T00:00:00');
+  const endMs = Date.parse(sprint.end+'T00:00:00');
+  const n = Math.max(1, Math.round((endMs-startMs)/86400000));
+  const today = Date.now();
+  const out = [];
+  for(let i=0;i<=n;i++){
+    const dayEnd = startMs + (i+1)*86400000 - 1;
+    const started = startMs + i*86400000 <= today;
+    const burnt = list.filter(b=>b.status==='done' && b.doneAt && Date.parse(b.doneAt)<=dayEnd)
+                      .reduce((a,b)=>a+storyPoints(b), 0);
+    out.push({ day:i, label: fmtISO(new Date(startMs + i*86400000)).slice(5),
+               ideal: Math.round((total*(1-i/n))*10)/10,
+               actual: started ? total-burnt : null });
+  }
+  return { points: out, total };
+}
+
 function projectUnits(p){
   const units = [];
+  // Agile: the backlog IS the plan, and a story's points are its weight — which
+  // is how an agile project still rolls up beside an S/M/L/XL one.
+  if((p.method||'traditional')==='agile'){
+    backlogOf(p).forEach(b=>units.push({
+      kind:'story', id:b.id, title:b.title, done:b.status==='done',
+      share: b.status==='done' ? 1 : 0,
+      weight: Math.max(1, storyPoints(b)), effort:null,
+      doneAt: b.doneAt||null, dueDate:null, pct:null
+    }));
+    return units;
+  }
   (p.subtasks||[]).forEach(s=>units.push({
     kind:'milestone', id:s.id, title:s.title, done:!!s.done,
-    // How much of this unit counts as closed: a tick, or the part-done figure.
-    share: s.done ? 1 : (s.pct ? Math.min(1, s.pct/100) : 0),
+    /* How much of this unit counts as closed: a tick, a part-done figure, or —
+       on a hybrid project — whatever the backlog items under it add up to. */
+    share: s.done ? 1
+         : s.source==='backlog' ? backlogProgress(stageBacklog(p, s.id))/100
+         : (s.pct ? Math.min(1, s.pct/100) : 0),
     weight:effortWeight(s), effort:(EFFORT[s.effort]?s.effort:DEFAULT_EFFORT),
     doneAt:s.doneAt||null, dueDate:null, pct:s.pct||null
   }));
@@ -1937,11 +2095,25 @@ function effortChip(effortKey, dataAttrs){
    to fill them. A pin is now a reference: a bare item id for a task, or
    "ms:<projectId>:<subtaskId>" for a milestone. Old pins keep working unchanged. */
 const MS_PREFIX = 'ms:';
+const STORY_PREFIX = 'st:';
+function storyRef(projectId, storyId){ return STORY_PREFIX + projectId + ':' + storyId; }
+function isStoryRef(ref){ return typeof ref==='string' && ref.indexOf(STORY_PREFIX)===0; }
 function msRef(projectId, subId){ return MS_PREFIX + projectId + ':' + subId; }
 function isMsRef(ref){ return typeof ref==='string' && ref.indexOf(MS_PREFIX)===0; }
 
 /* Resolve a pin to something renderable, or null if it no longer exists. */
 function resolveFocus(ref){
+  // An agile project has no milestones, so its backlog items are what Now pins.
+  if(isStoryRef(ref)){
+    const rest = ref.slice(STORY_PREFIX.length);
+    const cut = rest.indexOf(':');
+    if(cut < 0) return null;
+    const proj = byId(rest.slice(0, cut));
+    const story = proj && backlogOf(proj).find(x=>x.id === rest.slice(cut+1));
+    if(!story) return null;
+    return { ref, kind:'story', project:proj, story, title:story.title, done:story.status==='done',
+             priority:proj.priority, effort:null, category:proj.category };
+  }
   if(isMsRef(ref)){
     const rest = ref.slice(MS_PREFIX.length);
     const cut = rest.indexOf(':');
@@ -1979,6 +2151,12 @@ function nextMilestone(p){
   const pinned = new Set(nowPins());
   return (p.subtasks||[]).find(sx=>!sx.done && !pinned.has(msRef(p.id, sx.id))) || null;
 }
+/* The agile equivalent: whatever is being worked on, else the top of the backlog. */
+function nextStory(p){
+  const pinned = new Set(nowPins());
+  const open = backlogOf(p).filter(b=>b.status!=='done' && !pinned.has(storyRef(p.id, b.id)));
+  return open.find(b=>b.status==='doing') || open[0] || null;
+}
 
 /* Suggestions for Now: starred or high-priority tasks, plus the next milestone of
    each starred or high-priority project. One milestone per project, so a single
@@ -1997,6 +2175,14 @@ function upNextCandidates(){
   projects()
     .filter(p=>p.status!=='done' && inactiveProjects.indexOf(p.id)===-1 && (p.isStarred || p.priority==='high'))
     .forEach(p=>{
+      if((p.method||'traditional')==='agile'){
+        const story = nextStory(p);
+        if(!story) return;
+        out.push({ ref:storyRef(p.id, story.id), kind:'story', project:p, story, title:story.title, done:false,
+                   priority:p.priority, effort:null, category:p.category,
+                   dueDate:p.dueDate, createdAt:p.createdAt });
+        return;
+      }
       const sub = nextMilestone(p);
       if(!sub) return;
       out.push({ ref:msRef(p.id, sub.id), kind:'milestone', project:p, sub, title:sub.title, done:false,
@@ -2373,7 +2559,10 @@ function focusMeta(f){
   const bits = [];
   bits.push(`<span class="chip" style="${catStyle(f.project.category)}">${esc(f.project.category)}</span>`);
   bits.push(`<button class="parent-chip" data-action="open-project-report" data-id="${f.project.id}" title="Open the project">📁 ${esc(f.project.title)}</button>`);
-  bits.push(`<span class="effort-chip" style="cursor:default">${(EFFORT[f.effort]||EFFORT[DEFAULT_EFFORT]).label}</span>`);
+  // A backlog item is sized in points, not in S/M/L/XL — show what it is sized in.
+  bits.push(f.kind==='story'
+    ? `<span class="effort-chip" style="cursor:default" title="Story points">${storyPoints(f.story)}</span>`
+    : `<span class="effort-chip" style="cursor:default">${(EFFORT[f.effort]||EFFORT[DEFAULT_EFFORT]).label}</span>`);
   if(f.project.dueDate) bits.push(`<span style="${isOverdue(f.project)?'color:var(--c-danger);font-weight:700':''}">${fmtDue(f.project.dueDate)}</span>`);
   return `<div class="item-meta">${bits.join('')}</div>`;
 }
@@ -2381,7 +2570,9 @@ function focusMeta(f){
 function focusCheckAttrs(f){
   return f.kind==='task'
     ? `data-action="complete" data-id="${f.item.id}"`
-    : `data-action="toggle-subtask" data-id="${f.project.id}" data-sub="${f.sub.id}"`;
+    : f.kind==='story'
+      ? `data-action="finish-story" data-id="${f.project.id}" data-story="${f.story.id}"`
+      : `data-action="toggle-subtask" data-id="${f.project.id}" data-sub="${f.sub.id}"`;
 }
 function focusOpenAttrs(f){
   return f.kind==='task'
@@ -2764,7 +2955,8 @@ function renderProjectCard(p, i){
           ${st.openRisks?`<span class="health-chip health-behind" title="Open risks and issues">⚠ ${st.openRisks}</span>`:''}
           <span>${st.container
             ? (st.total? `${pctLabel(st)} · ${st.total} under it · ${pts(st.weightDone)}/${pts(st.weightTotal)} effort` : 'Nothing under it yet')
-            : (st.hasPlan? `${pctLabel(st)} · ${st.done}/${st.total} steps · ${pts(st.weightDone)}/${pts(st.weightTotal)} effort` : 'No milestones or tasks yet')}</span>
+            : (st.hasPlan? `${pctLabel(st)} · ${st.done}/${st.total} ${(p.method||'traditional')==='agile'?'items':'steps'} · ${pts(st.weightDone)}/${pts(st.weightTotal)} ${(p.method||'traditional')==='agile'?'points':'effort'}` : 'No milestones or tasks yet')}</span>
+          ${(p.method&&p.method!=='traditional')?`<span class="chip" title="${esc(METHODS[p.method].sub)}">${METHODS[p.method].label}</span>`:''}
           ${st.budget!=null?`<span title="Spent against budget">${money(st.spent||0)} / ${withCurrency(st.budget)}</span>`:''}
           ${parentOf(p)?`<span title="Sits under">↳ ${esc(parentOf(p).title)}</span>`:''}
           ${archived?'<span>· archived</span>':''}
@@ -2782,6 +2974,85 @@ function renderProjectCard(p, i){
     </div>
     ${expanded? renderProjectBody(p, children) : ''}
   </div>`;
+}
+
+/* The board. Three columns, one card per item, moved with ‹ and ›: a drag would
+   be prettier and far less reliable on a phone, which is where this gets used. */
+function renderBoard(p){
+  const scope = (ui.boardSprint||{})[p.id] || 'all';
+  const sprints = sprintsOf(p);
+  const sprint = activeSprint(p);
+  const all = backlogOf(p);
+  const list = scope==='all' ? all
+             : scope==='none' ? all.filter(b=>!b.sprintId)
+             : all.filter(b=>b.sprintId===scope);
+  const tally = sprint ? sprintTally(p, sprint.id) : null;
+  const hybrid = (p.method||'traditional')==='hybrid';
+  const milestones = (p.subtasks||[]).filter(s=>s.source==='backlog');
+
+  const card = b => `
+    <div class="story">
+      <div class="story-top">
+        <button class="effort-chip" data-action="story-points" data-id="${p.id}" data-story="${b.id}" title="Story points — tap to step">${storyPoints(b)}</button>
+        <span class="story-title ${b.status==='done'?'done':''}">${esc(b.title)}</span>
+      </div>
+      <div class="story-foot">
+        <button class="icon-btn btn-sm" data-action="story-move" data-dir="-1" data-id="${p.id}" data-story="${b.id}" title="Move back" ${b.status==='todo'?'disabled':''}>‹</button>
+        <button class="icon-btn btn-sm" data-action="story-move" data-dir="1" data-id="${p.id}" data-story="${b.id}" title="Move on" ${b.status==='done'?'disabled':''}>›</button>
+        <select data-action-change="story-sprint" data-id="${p.id}" data-story="${b.id}" title="Which sprint">
+          <option value="">No sprint</option>
+          ${sprints.map(sp=>`<option value="${esc(sp.id)}" ${sp.id===b.sprintId?'selected':''}>${esc(sp.name)}</option>`).join('')}
+        </select>
+        ${hybrid && milestones.length ? `<select data-action-change="story-stage" data-id="${p.id}" data-story="${b.id}" title="Which milestone this belongs to">
+          <option value="">No milestone</option>
+          ${milestones.map(m=>`<option value="${esc(m.id)}" ${m.id===b.stageId?'selected':''}>${esc(m.title)}</option>`).join('')}
+        </select>`:''}
+        ${pinButton(storyRef(p.id, b.id))}
+        <button class="icon-btn btn-sm" data-action="story-edit" data-id="${p.id}" data-story="${b.id}" title="Rename">✎</button>
+        <button class="icon-btn btn-sm btn-danger" data-action="story-delete" data-id="${p.id}" data-story="${b.id}" title="Delete">✕</button>
+      </div>
+    </div>`;
+
+  return `
+    <div class="section-label" style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
+      <span>Sprint</span>
+      <span style="display:flex;gap:6px;flex-wrap:wrap">
+        ${sprint? `<button class="btn btn-sm" data-action="edit-sprint" data-id="${p.id}" data-sprint="${sprint.id}">Edit sprint</button>`:''}
+        <button class="btn btn-sm" data-action="add-sprint" data-id="${p.id}">+ Sprint</button>
+      </span>
+    </div>
+    ${sprint ? `<div class="sprint-bar">
+      <div>
+        <b>${esc(sprint.name)}</b>
+        <span class="view-sub" style="margin:0"> · ${fmtHistoryDate(sprint.start+'T00:00:00')} to ${fmtHistoryDate(sprint.end+'T00:00:00')}</span>
+        ${sprint.goal? `<div class="view-sub" style="margin:2px 0 0">🎯 ${esc(sprint.goal)}</div>`:''}
+      </div>
+      <div class="view-sub" style="margin:0;white-space:nowrap">${tally.done} of ${tally.total} pts · ${tally.items} item${tally.items===1?'':'s'}</div>
+    </div>` : `<div class="view-sub" style="margin-bottom:10px">No sprint yet. You can work the board without one — a sprint just puts a fence and a date around a slice of it.</div>`}
+
+    <div class="section-label" style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
+      <span>Board</span>
+      <select data-action-change="board-scope" data-id="${p.id}" style="font-size:12px;padding:5px 8px;border-radius:8px;border:1px solid var(--c-border);background:var(--c-surface);color:var(--c-text)">
+        <option value="all" ${scope==='all'?'selected':''}>Everything (${all.length})</option>
+        ${sprints.map(sp=>`<option value="${esc(sp.id)}" ${scope===sp.id?'selected':''}>${esc(sp.name)} (${all.filter(b=>b.sprintId===sp.id).length})</option>`).join('')}
+        <option value="none" ${scope==='none'?'selected':''}>Not in a sprint (${all.filter(b=>!b.sprintId).length})</option>
+      </select>
+    </div>
+    <div class="board">
+      ${Object.keys(STORY_STATES).map(col=>{
+        const inCol = list.filter(b=>b.status===col);
+        const pts2 = inCol.reduce((a,b)=>a+storyPoints(b), 0);
+        return `<div class="board-col">
+          <div class="board-head">${STORY_STATES[col]} <span>${inCol.length}${pts2?` · ${pts2} pts`:''}</span></div>
+          ${inCol.map(card).join('') || '<div class="view-sub" style="padding:8px 2px">Nothing here.</div>'}
+        </div>`;
+      }).join('')}
+    </div>
+    <div class="sub-add" style="margin-top:10px">
+      <input type="text" data-role="new-story" data-id="${p.id}" placeholder="Add a backlog item…" data-action-enter="add-story"/>
+      <button class="btn btn-sm" data-action="add-story" data-id="${p.id}">Add</button>
+    </div>
+    <div class="view-sub" style="margin-top:8px">Progress on this project is ${(p.method||'traditional')==='agile'?'the share of backlog points finished':'its milestones, where one driven by the backlog takes its figure from the items assigned to it'}. Points double as its effort weight, so it still rolls up beside everything else.</div>`;
 }
 
 function renderProjectBody(p, children){
@@ -2804,7 +3075,12 @@ function renderProjectBody(p, children){
       <div class="view-sub" style="margin-top:10px">Completion, effort and budget here are whatever the items above add up to, each by its share.</div>
     </div>`;
   }
+  const method = p.method || 'traditional';
+  if(method==='agile'){
+    return `<div class="project-body">${renderBoard(p)}</div>`;
+  }
   return `<div class="project-body">
+    ${method==='hybrid' ? renderBoard(p) + '<div style="height:18px"></div>' : ''}
     <div class="section-label">Milestones <span style="text-transform:none;letter-spacing:0;font-weight:500">— tap S/M/L/XL to size a step</span></div>
     <div class="sub-list">
       ${p.subtasks.map((s,si)=>`
@@ -3334,17 +3610,18 @@ function renderReportsView(){
   return `<div class="view">
     <div class="view-head">
       <div><div class="view-title">Reports</div><div class="view-sub">Progress by life area, project, and habit — plus a full completed-tasks timeline.</div></div>
-      <button class="btn" data-action="export-report">⇩ Export ${tab==='projects'?'portfolio':tab==='portfolio'?'the tree':tab==='areas'?'life areas':tab==='habits'?'habits':tab==='compare'?'comparison':'completed work'}</button>
+      <button class="btn" data-action="export-report">⇩ Export ${tab==='projects'?'portfolio':tab==='portfolio'?'the tree':tab==='wins'?'your wins':tab==='areas'?'life areas':tab==='habits'?'habits':tab==='compare'?'comparison':'completed work'}</button>
     </div>
     <div class="chip-row">
       <button class="chip ${tab==='areas'?'on':''}" data-action="reports-tab" data-tab="areas">Life Areas</button>
       <button class="chip ${tab==='projects'?'on':''}" data-action="reports-tab" data-tab="projects">Projects</button>
       <button class="chip ${tab==='portfolio'?'on':''}" data-action="reports-tab" data-tab="portfolio">Portfolio</button>
+      <button class="chip ${tab==='wins'?'on':''}" data-action="reports-tab" data-tab="wins">Wins</button>
       <button class="chip ${tab==='habits'?'on':''}" data-action="reports-tab" data-tab="habits">Habits</button>
       <button class="chip ${tab==='compare'?'on':''}" data-action="reports-tab" data-tab="compare">Compare</button>
       <button class="chip ${tab==='timeline'?'on':''}" data-action="reports-tab" data-tab="timeline">Timeline</button>
     </div>
-    ${tab==='projects'? renderReportsProjectsView() : tab==='portfolio'? renderReportsPortfolioView() : tab==='habits'? renderReportsHabitsView() : tab==='compare'? renderReportsCompareView() : tab==='timeline'? renderReportsTimelineView() : renderReportsAreasView()}
+    ${tab==='projects'? renderReportsProjectsView() : tab==='portfolio'? renderReportsPortfolioView() : tab==='wins'? renderReportsWinsView() : tab==='habits'? renderReportsHabitsView() : tab==='compare'? renderReportsCompareView() : tab==='timeline'? renderReportsTimelineView() : renderReportsAreasView()}
   </div>`;
 }
 
@@ -3580,6 +3857,141 @@ function renderTreeRow(p, depth, share){
       ${bar}
     </div>
     ${kids.map(c=>renderTreeRow(c, depth+1, total? Math.round(Math.max(0.0001,c.weight||1)/total*100) : null)).join('')}`;
+}
+
+/* =========================================================
+   Reports > Wins — what you finished
+
+   Everything else in Reports is about what is not done yet: what is late, what
+   is at risk, what is left. Finished projects fell straight off the end of it —
+   closed, and then invisible. This is the other half of the record, and it is
+   deliberately written as a win rather than as a row in a log.
+   ========================================================= */
+function winsData(rangeKey){
+  const r = BRAG_RANGES[rangeKey] || BRAG_RANGES.year;
+  const from = r.from(), to = todayISO();
+  const inRange = d => !!d && d.slice(0,10) >= from && d.slice(0,10) <= to;
+
+  const delivered = projects()
+    .filter(p=>p.status==='done' && inRange(p.completedAt))
+    .sort((a,b)=>String(b.completedAt).localeCompare(String(a.completedAt)))
+    .map(p=>{
+      const closed = (p.subtasks||[]).filter(sx=>sx.done);
+      const effort = closed.reduce((a,sx)=>a+effortWeight(sx), 0)
+                   + tasksOf(p.id).filter(t=>t.status==='done').reduce((a,t)=>a+effortWeight(t), 0);
+      const startMs = projectStartMs(p);
+      const endMs = Date.parse(p.completedAt) || Date.now();
+      return { p, steps: closed.length, effort, days: Math.max(1, dayDiff(startMs, endMs)),
+               onTime: p.dueDate ? (p.completedAt.slice(0,10) <= p.dueDate) : null,
+               underBudget: (p.budget!=null && p.actualCost!=null) ? p.actualCost <= p.budget : null,
+               risksClosed: (p.risks||[]).filter(x=>x.status==='closed').length };
+    });
+
+  // Milestones closed on projects still running — a quarter with no delivery is
+  // not a quarter with nothing to show.
+  const advanced = [];
+  projects().filter(p=>p.status!=='done' && !isContainerKind(p)).forEach(p=>{
+    const closed = (p.subtasks||[]).filter(sx=>sx.done && inRange(sx.doneAt));
+    if(closed.length) advanced.push({ p, closed,
+      effort: closed.reduce((a,sx)=>a+effortWeight(sx), 0) });
+  });
+  advanced.sort((a,b)=>b.effort-a.effort);
+
+  const tasksDone = completedItems().filter(i=>i.type==='task' && inRange(i.completedAt));
+  const byArea = {};
+  delivered.forEach(w=>{ byArea[w.p.category] = (byArea[w.p.category]||0) + 1; });
+
+  return { from, to, label:r.label, delivered, advanced, tasksDone,
+    steps: delivered.reduce((a,w)=>a+w.steps,0) + advanced.reduce((a,x)=>a+x.closed.length,0),
+    effort: delivered.reduce((a,w)=>a+w.effort,0) + advanced.reduce((a,x)=>a+x.effort,0),
+    byArea: Object.keys(byArea).map(k=>({ label:k, value:byArea[k] })) };
+}
+
+/* Deliveries per month for the last year: the shape of a run of finished work. */
+function winsByMonth(){
+  const out = [];
+  const now = new Date();
+  for(let i=11;i>=0;i--){
+    const d = new Date(now.getFullYear(), now.getMonth()-i, 1);
+    const key = fmtISO(d).slice(0,7);
+    out.push({ key, label: d.toLocaleDateString(undefined,{month:'short'}),
+      n: projects().filter(p=>p.status==='done' && (p.completedAt||'').slice(0,7)===key).length });
+  }
+  return out;
+}
+
+function renderReportsWinsView(){
+  const range = BRAG_RANGES[ui.winsRange] ? ui.winsRange : 'year';
+  const w = winsData(range);
+  const pretty = iso => fmtHistoryDate(iso);
+  const months = winsByMonth();
+  const best = months.reduce((a,m)=>Math.max(a,m.n), 0);
+
+  const headline = w.delivered.length
+    ? `<b>${w.delivered.length} project${w.delivered.length===1?'':'s'} finished</b> ${w.label.toLowerCase()} — ${w.steps} step${w.steps===1?'':'s'} closed and ${pts(w.effort)} effort point${w.effort===1?'':'s'} of work behind ${w.delivered.length===1?'it':'them'}.`
+    : w.steps
+      ? `Nothing closed out completely ${w.label.toLowerCase()}, but <b>${w.steps} step${w.steps===1?'':'s'}</b> went down — ${pts(w.effort)} effort points of real work.`
+      : `Nothing finished ${w.label.toLowerCase()} yet. The moment a project is ticked complete it lands here.`;
+
+  return `
+    <div class="chip-row">
+      ${Object.keys(BRAG_RANGES).map(k=>`<button class="chip ${range===k?'on':''}" data-action="wins-range" data-range="${k}">${BRAG_RANGES[k].label}</button>`).join('')}
+    </div>
+    <div class="card win-hero" style="margin-bottom:18px">
+      <div class="win-hero-n">${w.delivered.length}</div>
+      <div>
+        <div style="font-weight:600;font-size:15px">Finished${w.delivered.length===1?'':''}</div>
+        <div class="view-sub" style="margin-top:2px">${headline}</div>
+      </div>
+    </div>
+
+    ${w.delivered.length ? `
+      <div class="section-label">What you finished</div>
+      ${w.delivered.map(x=>`
+        <div class="card win-card" style="margin-bottom:10px">
+          <div class="win-top">
+            <span class="win-mark">🏆</span>
+            <span class="clickable-title win-title" data-action="open-project-report" data-id="${x.p.id}">${(x.p.kind&&x.p.kind!=='project')?PROJECT_KINDS[x.p.kind].mark+' ':''}${esc(x.p.title)}</span>
+            <span class="chip" style="${catStyle(x.p.category)}">${esc(x.p.category)}</span>
+            ${x.onTime===true?'<span class="health-chip health-done">on time</span>':''}
+            ${x.onTime===false?'<span class="health-chip health-risk">late, but done</span>':''}
+            ${x.underBudget===true?'<span class="health-chip health-done">within budget</span>':''}
+            ${x.underBudget===false?'<span class="health-chip health-risk">over budget</span>':''}
+          </div>
+          <div class="view-sub" style="margin-top:4px">
+            Finished ${pretty(x.p.completedAt)} · ${x.steps} step${x.steps===1?'':'s'} · ${pts(x.effort)} effort point${x.effort===1?'':'s'} · ${x.days} day${x.days===1?'':'s'} from start to done${x.p.budget!=null?` · ${money(x.p.actualCost||0)} of ${withCurrency(x.p.budget)} spent`:''}${x.risksClosed?` · ${x.risksClosed} risk${x.risksClosed===1?'':'s'} seen off`:''}
+          </div>
+        </div>`).join('')}
+    ` : ''}
+
+    ${donutCard('donut-wins', w.byArea, {
+      title:'Which part of your life finished things',
+      sub:'Projects completed in this period, by domain.',
+      empty: w.delivered.length? '' : 'No completed projects in this period yet.',
+      fmt: n=>n+(n===1?' project':' projects') })}
+
+    ${w.advanced.length ? `
+      <div class="section-label">And what moved without finishing</div>
+      <div class="mini-table-wrap"><table class="mini-table">
+        <thead><tr><th>Project</th><th class="num">Steps closed</th><th class="num">Effort</th></tr></thead>
+        <tbody>${w.advanced.slice(0,10).map(x=>`<tr class="row-link" data-action="open-project-report" data-id="${x.p.id}">
+          <td>${esc(x.p.title)}</td><td class="num">${x.closed.length}</td><td class="num">${pts(x.effort)}</td></tr>`).join('')}</tbody>
+      </table></div>
+      <div class="view-sub" style="margin:6px 0 18px">Steps closed on projects that are still running. Finishing is not the only kind of progress.</div>
+    ` : ''}
+
+    <div class="section-label">Finishing, month by month</div>
+    <div class="card" style="margin-bottom:12px;padding:16px 18px">
+      <div class="spark">
+        ${months.map(m=>`<div class="spark-col" title="${m.n} finished in ${m.label}">
+          <div class="spark-bar" style="height:${best? Math.max(3, Math.round(m.n/best*56)) : 3}px;${m.n?'':'opacity:.3'}"></div>
+          <div class="spark-lbl">${m.label}</div>
+          <div class="spark-n">${m.n||''}</div>
+        </div>`).join('')}
+      </div>
+    </div>
+    <div class="view-sub">The last twelve months. A quiet month is not a failed one — the table above is where the work in progress shows up.</div>
+  `;
 }
 
 function renderReportsPortfolioView(){
@@ -3940,6 +4352,7 @@ let projectTrendChart = null;
 function closeModal(){
   if(habitTrendChart){ try{ habitTrendChart.destroy(); }catch(e){} habitTrendChart=null; }
   if(projectTrendChart){ try{ projectTrendChart.destroy(); }catch(e){} projectTrendChart=null; }
+  destroyAgileCharts();
   qs('#modal-root').innerHTML='';
 }
 
@@ -4435,6 +4848,13 @@ function modalRenameSubtask(p, sub){
   openModal(`
     <h3>Rename milestone</h3>
     <div class="field"><label>Title</label><input id="ms-title" value="${esc(sub.title)}" data-action-enter="confirm-rename-subtask" data-id="${p.id}" data-sub="${sub.id}"/></div>
+    ${(p.method||'traditional')==='hybrid' ? `<div class="field"><label>Where its progress comes from</label>
+      <select id="ms-source">
+        <option value="manual" ${sub.source!=='backlog'?'selected':''}>A tick, or a part-done figure</option>
+        <option value="backlog" ${sub.source==='backlog'?'selected':''}>The backlog items assigned to it</option>
+      </select>
+      <div class="view-sub" style="margin-top:4px">Hybrid only: a phase tracked as a phase, with the work inside it tracked as backlog items.</div>
+    </div>`:''}
     ${sub.done ? '' : `<div class="field"><label>Part done</label>
       <input id="ms-pct" type="number" min="0" max="99" step="5" placeholder="0" value="${sub.pct||''}"/>
       <div class="view-sub" style="margin-top:4px">A milestone is a tick by default. A long one — a build phase, a licence application — can report how far through it is instead, and that share counts towards the project's completion.</div>
@@ -4451,6 +4871,42 @@ function modalRenameSubtask(p, sub){
 
    These are the parts a tracker has and a to-do list does not. Every one is
    optional — a project that uses none of them shows none of them. */
+
+/* What an agile project has instead of a milestone list, plus the two charts a
+   sprint is actually judged by. */
+function agilePanel(p){
+  const method = p.method || 'traditional';
+  if(method==='traditional') return '';
+  const all = backlogOf(p);
+  const sprint = activeSprint(p);
+  const vel = velocity(p);
+  const avg = vel.length ? Math.round(vel.reduce((a,x)=>a+x.done,0)/vel.length) : null;
+  const tally = sprint ? sprintTally(p, sprint.id) : null;
+  const byState = k => all.filter(b=>b.status===k);
+  return `
+    <div class="section-label">Backlog</div>
+    ${all.length ? `
+      <div class="rollup-grid" style="margin-bottom:10px">
+        <div class="rollup-tile"><div class="v">${Math.round(backlogProgress(all))}%</div><div class="k">Backlog done</div></div>
+        <div class="rollup-tile"><div class="v">${all.reduce((a,b)=>a+storyPoints(b),0)}</div><div class="k">Points in all</div></div>
+        <div class="rollup-tile"><div class="v">${byState('doing').length}</div><div class="k">In progress</div></div>
+        <div class="rollup-tile"><div class="v">${avg==null?'—':avg}</div><div class="k">Average velocity</div></div>
+      </div>
+      ${sprint? `<div class="view-sub" style="margin-bottom:12px"><b>${esc(sprint.name)}</b> — ${tally.done} of ${tally.total} points, ${fmtHistoryDate(sprint.start+'T00:00:00')} to ${fmtHistoryDate(sprint.end+'T00:00:00')}.${sprint.goal?` Goal: ${esc(sprint.goal)}.`:''}</div>`:''}
+      ${(chartsAvailable() && sprint && sprintTally(p, sprint.id).total) ? `<div class="section-label">Burndown — ${esc(sprint.name)}</div>
+        <div style="height:150px;margin-bottom:6px"><canvas id="chart-burndown"></canvas></div>
+        <div class="view-sub" style="margin-bottom:14px">Points left each day against the straight line from full to empty. Above the line is behind.</div>`:''}
+      ${(chartsAvailable() && vel.length>1) ? `<div class="section-label">Velocity</div>
+        <div style="height:130px;margin-bottom:6px"><canvas id="chart-velocity"></canvas></div>
+        <div class="view-sub" style="margin-bottom:14px">Points finished per sprint. What you actually get through, which is what the next sprint should be planned against.</div>`:''}
+      <ul style="margin:0 0 14px;padding:0;list-style:none">
+        ${all.slice().sort((a,b)=>Object.keys(STORY_STATES).indexOf(a.status)-Object.keys(STORY_STATES).indexOf(b.status)).map(b=>`
+          <li style="font-size:13.5px;padding:4px 0;${b.status==='done'?'text-decoration:line-through;color:var(--c-text-muted)':''}">
+            ${b.status==='done'?'☑':b.status==='doing'?'◐':'☐'} <span class="effort-chip" style="cursor:default">${storyPoints(b)}</span> ${esc(b.title)}
+          </li>`).join('')}
+      </ul>
+    ` : `<div class="view-sub" style="margin-bottom:14px">Nothing in the backlog yet. Open the project and add items to the board.</div>`}`;
+}
 
 function moneyPanel(st){
   if(st.budget==null && st.spent==null) return '';
@@ -4581,6 +5037,25 @@ function childrenPanel(st){
     : '<div class="view-sub" style="margin-bottom:14px">Nothing under it yet. Edit a project and set this one as what it sits under.</div>'}`;
 }
 
+function modalEditSprint(p, sprint){
+  const list = sprintsOf(p);
+  const lastEnd = list.length ? list[list.length-1].end : null;
+  const start = sprint ? sprint.start : (lastEnd ? fmtISO(addDays(new Date(lastEnd+'T00:00:00'),1)) : todayISO());
+  const sp = sprint || { id:null, name:`Sprint ${list.length+1}`, goal:'',
+                         start, end: fmtISO(addDays(new Date(start+'T00:00:00'), SPRINT_DAYS-1)) };
+  openModal(`
+    <h3>${sprint?'Edit':'New'} sprint — ${esc(p.title)}</h3>
+    <div class="field"><label>Name</label><input id="sp-name" value="${esc(sp.name)}"/></div>
+    <div class="field"><label>Goal</label><input id="sp-goal" value="${esc(sp.goal)}" placeholder="What this sprint is for (optional)"/></div>
+    <div class="field"><label>Starts</label><input id="sp-start" type="date" value="${esc(sp.start)}"/></div>
+    <div class="field"><label>Ends</label><input id="sp-end" type="date" value="${esc(sp.end)}"/></div>
+    <div class="modal-actions">
+      ${sprint? `<button class="btn btn-danger" data-action="delete-sprint" data-id="${p.id}" data-sprint="${sprint.id}">Delete</button>`:''}
+      <button class="btn" data-action="close-modal">Cancel</button>
+      <button class="btn btn-primary" data-action="save-sprint" data-id="${p.id}" data-sprint="${sprint?sprint.id:''}">Save</button>
+    </div>`);
+}
+
 function modalEditRisk(p, risk){
   const r = risk || { id:null, type:'risk', title:'', probability:3, impact:3, status:'open', owner:'', response:'' };
   const scale = sel => [1,2,3,4,5].map(n=>`<option value="${n}" ${n===r[sel]?'selected':''}>${n} — ${RAID_SCALE[n]}</option>`).join('');
@@ -4656,6 +5131,7 @@ function modalProjectDetail(p){
     `}
     ${moneyPanel(st)}
     ${childrenPanel(st)}
+    ${st.container ? '' : agilePanel(p)}
     ${st.container ? '' : `
     <div class="section-label">Milestones</div>
     <ul style="margin:0 0 14px 0;padding:0;list-style:none">
@@ -4693,6 +5169,43 @@ function modalProjectDetail(p){
         scales:{ y:{ min:0, max:100, ticks:{color:tc}, grid:{color:gc} }, x:{ ticks:{color:tc, maxTicksLimit:7}, grid:{display:false} } },
         plugins:{ legend:{ display:st.timePct!=null, labels:{ color:tc, boxWidth:12, font:{size:11} } } } }
     });
+  }
+  drawAgileCharts(p);
+}
+
+/* Burndown and velocity live in the project's own panel, so they are destroyed
+   and rebuilt with it rather than with the page's charts. */
+let agileCharts = [];
+function destroyAgileCharts(){ agileCharts.forEach(c=>{ try{ c.destroy(); }catch(e){} }); agileCharts = []; }
+function drawAgileCharts(p){
+  destroyAgileCharts();
+  if(typeof Chart==='undefined') return;
+  const tc = chartTextColor(), gc = chartGridColor();
+  const sprint = activeSprint(p);
+  const burnEl = document.getElementById('chart-burndown');
+  if(burnEl && sprint && sprintTally(p, sprint.id).total){
+    const b = burndown(p, sprint);
+    agileCharts.push(new Chart(burnEl, {
+      type:'line',
+      data:{ labels: b.points.map(x=>x.label), datasets:[
+        { label:'Left', data: b.points.map(x=>x.actual), borderColor:'#2a78d6', backgroundColor:'#2a78d633', fill:true, tension:.25, pointRadius:2, spanGaps:false },
+        { label:'Plan', data: b.points.map(x=>x.ideal), borderColor:'#64748B', borderDash:[5,4], fill:false, tension:0, pointRadius:0 }
+      ] },
+      options:{ responsive:true, maintainAspectRatio:false,
+        scales:{ y:{ min:0, ticks:{color:tc}, grid:{color:gc} }, x:{ ticks:{color:tc, maxTicksLimit:7}, grid:{display:false} } },
+        plugins:{ legend:{ labels:{ color:tc, boxWidth:12, font:{size:11} } } } }
+    }));
+  }
+  const velEl = document.getElementById('chart-velocity');
+  if(velEl){
+    const v = velocity(p);
+    agileCharts.push(new Chart(velEl, {
+      type:'bar',
+      data:{ labels: v.map(x=>x.sprint.name), datasets:[{ data: v.map(x=>x.done), backgroundColor:'#1baf7a', borderRadius:4 }] },
+      options:{ responsive:true, maintainAspectRatio:false,
+        scales:{ y:{ beginAtZero:true, ticks:{color:tc}, grid:{color:gc} }, x:{ ticks:{color:tc}, grid:{display:false} } },
+        plugins:{ legend:{ display:false } } }
+    }));
   }
 }
 
@@ -4786,7 +5299,8 @@ function parentOptions(p){
 
 function modalEditItem(item){
   const areaNames = ['Inbox', ...state.state.lifeAreas.map(a=>a.name)];
-  const projectOptions = projects().filter(p=>p.id!==item.id);
+  // A task belongs to a project. A programme or portfolio holds projects, not tasks.
+  const projectOptions = projects().filter(p=>p.id!==item.id && !isContainerKind(p));
   const isProj = item.type==='project';
   const kind = item.kind || 'project';
   const parents = isProj ? parentOptions(item) : [];
@@ -4803,6 +5317,10 @@ function modalEditItem(item){
     <div class="field"><label>Weight in its parent</label><input id="ed-weight" type="number" min="0.1" step="0.1" value="${item.weight||1}"/>
       <div class="view-sub" style="margin-top:4px">How much of the parent this one counts for, next to its siblings. Two at 1 and one at 3 means the third carries 60%.</div>
     </div>` : ''}
+    ${kind==='project' ? `<div class="field"><label>How it is run</label>
+      <select id="ed-method">${Object.keys(METHODS).map(k=>`<option value="${k}" ${k===(item.method||'traditional')?'selected':''}>${METHODS[k].label} — ${esc(METHODS[k].sub)}</option>`).join('')}</select>
+      <div class="view-sub" style="margin-top:4px">Nothing is thrown away when you switch: the milestones stay, the backlog stays, only which one counts changes.</div>
+    </div>`:''}
     <div class="field"><label>Reference</label><input id="ed-ref" type="text" placeholder="Order no., PO, contract, container…" value="${esc(item.ref||'')}"/></div>
     <div class="field"><label>Budget${c?' ('+esc(c)+')':''}</label><input id="ed-budget" type="number" min="0" step="1" placeholder="Optional" value="${item.budget!=null?item.budget:''}"/></div>
     <div class="field"><label>Spent so far${c?' ('+esc(c)+')':''}</label><input id="ed-spent" type="number" min="0" step="1" placeholder="Optional" value="${item.actualCost!=null?item.actualCost:''}"/></div>
@@ -5352,9 +5870,40 @@ function exportProjectReport(p){
     <p class="muted">Domain: ${esc(p.category)} &nbsp;·&nbsp; Priority: ${esc(p.priority)} &nbsp;·&nbsp; Status: ${esc(p.status)}${p.assignee?` &nbsp;·&nbsp; Owner: ${esc(p.assignee)}`:''}${p.startDate?` &nbsp;·&nbsp; Start ${esc(p.startDate)}`:''}${p.dueDate?` &nbsp;·&nbsp; Due ${esc(p.dueDate)}`:''}</p>
     <p class="muted">Generated ${new Date().toLocaleDateString(undefined,{year:'numeric',month:'long',day:'numeric'})}</p>
     ${summary}
+    ${st.budget!=null||st.spent!=null ? `<h2>Budget</h2>
+    <table cellpadding="6" cellspacing="0" border="1" style="border-collapse:collapse;border-color:#E2E8F0">
+      <tr><td>Budget</td><td>${withCurrency(st.budget)}</td></tr>
+      <tr><td>Spent so far</td><td>${withCurrency(st.spent)}</td></tr>
+      <tr><td>Value earned</td><td>${withCurrency(st.earned==null?null:Math.round(st.earned))}</td></tr>
+      <tr><td>Cost index (CPI)</td><td>${st.cpi==null?'—':st.cpi.toFixed(2)}${st.cpi!=null&&st.cpi<1?' — over budget for the progress made':''}</td></tr>
+      <tr><td>Schedule index (SPI)</td><td>${st.spi==null?'—':st.spi.toFixed(2)}</td></tr>
+      <tr><td>Forecast total</td><td>${withCurrency(st.forecast==null?null:Math.round(st.forecast))}</td></tr>
+    </table>`:''}
+    ${st.container ? `<h2>What sits under it</h2>
+    <table cellpadding="6" cellspacing="0" border="1" style="border-collapse:collapse;border-color:#E2E8F0">
+      <tr><th align="left">Item</th><th align="right">Weight</th><th align="right">Complete</th><th align="left">Health</th></tr>
+      ${st.children.map(x=>`<tr><td>${esc(x.c.title)}</td><td align="right">${x.c.weight||1}</td><td align="right">${x.st.pct==null?'—':x.st.pct+'%'}</td><td>${HEALTH_META[x.st.health].label}</td></tr>`).join('') || '<tr><td colspan="4" class="muted">Nothing yet</td></tr>'}
+    </table>`:`
     <h2>Milestones</h2><ul>${milestones.map(line).join('') || '<li class="muted">None</li>'}</ul>
-    <h2>Tasks</h2><ul>${tasks.map(line).join('') || '<li class="muted">None</li>'}</ul>
-    <p class="muted">Effort sizes: S=1, M=2, L=3, XL=5. Weighted completion is closed effort points over total effort points.</p>`;
+    <h2>Tasks</h2><ul>${tasks.map(line).join('') || '<li class="muted">None</li>'}</ul>`}
+    ${backlogOf(p).length? `<h2>Backlog</h2>
+    <table cellpadding="6" cellspacing="0" border="1" style="border-collapse:collapse;border-color:#E2E8F0">
+      <tr><th align="left">Item</th><th align="right">Points</th><th align="left">State</th><th align="left">Sprint</th></tr>
+      ${backlogOf(p).map(b=>{ const sp=(p.sprints||[]).find(x=>x.id===b.sprintId);
+        return `<tr><td>${esc(b.title)}</td><td align="right">${storyPoints(b)}</td><td>${STORY_STATES[b.status]}</td><td>${sp?esc(sp.name):'—'}</td></tr>`; }).join('')}
+    </table>`:''}
+    ${(p.risks||[]).length? `<h2>Risks, issues, assumptions and dependencies</h2>
+    <table cellpadding="6" cellspacing="0" border="1" style="border-collapse:collapse;border-color:#E2E8F0">
+      <tr><th align="left">What</th><th align="left">Type</th><th align="right">Score</th><th align="left">State</th><th align="left">Owner</th><th align="left">Response</th></tr>
+      ${(p.risks||[]).slice().sort((a,b)=>riskScore(b)-riskScore(a)).map(r=>`<tr><td>${esc(r.title)}</td><td>${RAID_TYPES[r.type].label}</td><td align="right">${r.status==='closed'?'—':riskScore(r)}</td><td>${RAID_STATES[r.status]}</td><td>${esc(r.owner||'—')}</td><td>${esc(r.response||'—')}</td></tr>`).join('')}
+    </table>`:''}
+    ${(p.ref || (p.fields||[]).length)? `<h2>Details</h2>
+    <table cellpadding="6" cellspacing="0" border="1" style="border-collapse:collapse;border-color:#E2E8F0">
+      ${p.ref? `<tr><td><b>Reference</b></td><td>${esc(p.ref)}</td></tr>`:''}
+      ${(p.fields||[]).map(f=>`<tr><td><b>${esc(f.label)}</b></td><td>${esc(f.value)}</td></tr>`).join('')}
+    </table>`:''}
+    ${(p.log||[]).length? `<h2>What happened</h2><ul>${(p.log||[]).slice().sort((a,b)=>String(b.at).localeCompare(String(a.at))).map(l=>`<li><b>${esc(fmtHistoryDate(l.at))}</b> — ${esc(l.text)}</li>`).join('')}</ul>`:''}
+    <p class="muted">Effort sizes: S=1, M=2, L=3, XL=5. Weighted completion is closed effort points over total effort points. Risk score is how likely × how much it would hurt, on 1–5 each. CPI is value earned ÷ money spent; under 1.00 means over budget for the progress made.</p>`;
   downloadWordDoc(`${p.title.replace(/[^a-z0-9]+/gi,'-')}-report.doc`, p.title, html);
   pushToast('Report downloaded');
 }
@@ -5441,6 +5990,32 @@ function exportHabitsReport(){
     </table>`;
   downloadWordDoc(`habits-${todayISO()}.doc`, 'Habits', html);
   pushToast('Habits report downloaded');
+}
+
+function exportWinsReport(){
+  const range = BRAG_RANGES[ui.winsRange] ? ui.winsRange : 'year';
+  const w = winsData(range);
+  const pretty = iso => fmtHistoryDate(iso);
+  const html = `<h1>What I finished</h1>
+    <p class="muted">${w.label} &nbsp;·&nbsp; generated ${new Date().toLocaleDateString(undefined,{year:'numeric',month:'long',day:'numeric'})}</p>
+    <p><b>${w.delivered.length} project${w.delivered.length===1?'':'s'} finished, ${w.steps} step${w.steps===1?'':'s'} closed, ${pts(w.effort)} effort points of work.</b></p>
+    ${w.delivered.length? `<h2>Finished end to end</h2>
+    <table cellpadding="6" cellspacing="0" border="1" style="border-collapse:collapse;border-color:#E2E8F0">
+      <tr><th align="left">Project</th><th align="left">Domain</th><th align="left">Finished</th><th align="right">Steps</th><th align="right">Effort</th><th align="right">Days</th><th align="left">Against plan</th></tr>
+      ${w.delivered.map(x=>`<tr>
+        <td>${esc(x.p.title)}</td><td>${esc(x.p.category)}</td><td>${pretty(x.p.completedAt)}</td>
+        <td align="right">${x.steps}</td><td align="right">${pts(x.effort)}</td><td align="right">${x.days}</td>
+        <td>${[x.onTime===true?'on time':x.onTime===false?'late':'', x.underBudget===true?'within budget':x.underBudget===false?'over budget':''].filter(Boolean).join(', ')||'—'}</td>
+      </tr>`).join('')}
+    </table>`:''}
+    ${w.advanced.length? `<h2>Moved forward without finishing</h2>
+    <table cellpadding="6" cellspacing="0" border="1" style="border-collapse:collapse;border-color:#E2E8F0">
+      <tr><th align="left">Project</th><th align="right">Steps closed</th><th align="right">Effort</th></tr>
+      ${w.advanced.map(x=>`<tr><td>${esc(x.p.title)}</td><td align="right">${x.closed.length}</td><td align="right">${pts(x.effort)}</td></tr>`).join('')}
+    </table>`:''}
+    <p class="muted">Effort sizes: S=1, M=2, L=3, XL=5. Days are from the project's start date, or its creation date where none was set, to the day it was ticked complete.</p>`;
+  downloadWordDoc(`wins-${todayISO()}.doc`, 'What I finished', html);
+  pushToast('Wins downloaded');
 }
 
 function exportPortfolioTreeReport(){
@@ -5715,6 +6290,7 @@ function handleAction(action, el){
       render(); break;
     }
     case 'reports-tab': ui.reportsTab = el.getAttribute('data-tab'); render(); break;
+    case 'wins-range': ui.winsRange = el.getAttribute('data-range'); render(); break;
     case 'review-tab': ui.reviewTab = el.getAttribute('data-tab'); render(); break;
     case 'review-tick': {
       // No grantXP call here, by design.
@@ -5749,6 +6325,7 @@ function handleAction(action, el){
       const t = ui.reportsTab;
       if(t==='areas') exportAreasReport();
       else if(t==='portfolio') exportPortfolioTreeReport();
+      else if(t==='wins') exportWinsReport();
       else if(t==='compare') exportCompareReport();
       else if(t==='habits') exportHabitsReport();
       else if(t==='timeline') exportTimelineReport();
@@ -5841,6 +6418,7 @@ function handleAction(action, el){
           const n = Math.round(Number(qs('#ms-pct').value));
           sub.pct = (n>0 && n<100) ? n : null;
         }
+        if(qs('#ms-source')) sub.source = qs('#ms-source').value==='backlog' ? 'backlog' : 'manual';
         closeModal(); persist();
       }
       break;
@@ -5933,6 +6511,7 @@ function handleAction(action, el){
         if(qs('#ed-kind')){
           const num = sel => { const el = qs(sel); if(!el || el.value==='') return null; const n = Number(el.value); return isNaN(n)||n<0 ? null : n; };
           item.kind = PROJECT_KINDS[qs('#ed-kind').value] ? qs('#ed-kind').value : 'project';
+          if(qs('#ed-method')) item.method = METHODS[qs('#ed-method').value] ? qs('#ed-method').value : 'traditional';
           if(item.kind==='portfolio') item.parentId = null;
           else if(qs('#ed-parent')) item.parentId = qs('#ed-parent').value || null;
           const w = num('#ed-weight'); item.weight = w>0 ? w : 1;
@@ -5955,6 +6534,122 @@ function handleAction(action, el){
 
     /* The project office. Each of these re-opens the project's own panel when it
        is done, so the modal never closes out from under what you were reading. */
+    /* ---- the board ---- */
+    case 'board-scope': { ui.boardSprint[id] = el.value; render(); break; }
+    case 'add-story': {
+      const pr = byId(id);
+      const box = qs('input[data-role="new-story"][data-id="'+cssEscape(id)+'"]');
+      const title = box ? box.value.trim() : '';
+      if(!pr || !title) break;
+      pr.backlog = pr.backlog||[];
+      const sp = activeSprint(pr);
+      pr.backlog.push({ id: uid(), title, points: 1, status:'todo',
+                        sprintId: sp ? sp.id : null, stageId: null, doneAt: null });
+      if(box) box.value = '';
+      persist();
+      break;
+    }
+    case 'finish-story': {
+      const pr = byId(id);
+      const b = pr && backlogOf(pr).find(x=>x.id===el.getAttribute('data-story'));
+      if(!b) break;
+      const nowDone = b.status!=='done';
+      b.status = nowDone ? 'done' : 'todo';
+      b.doneAt = nowDone ? new Date().toISOString() : null;
+      if(nowDone){
+        // Finishing a pinned item frees its slot. Nothing is promoted into it.
+        const pins = nowPins();
+        const at = pins.indexOf(storyRef(pr.id, b.id));
+        if(at>=0) pins.splice(at,1);
+        grantXP(XP_TASK, 'Backlog item done');
+      }
+      persist();
+      break;
+    }
+    case 'story-move': {
+      const pr = byId(id);
+      const b = pr && backlogOf(pr).find(x=>x.id===el.getAttribute('data-story'));
+      if(!b) break;
+      const order = Object.keys(STORY_STATES);
+      const next = order[Math.min(order.length-1, Math.max(0, order.indexOf(b.status) + Number(el.getAttribute('data-dir'))))];
+      if(next===b.status) break;
+      b.status = next;
+      // Finishing stamps the date the burndown reads; unfinishing takes it back.
+      b.doneAt = next==='done' ? new Date().toISOString() : null;
+      if(next==='done') grantXP(XP_TASK, 'Backlog item done');
+      persist();
+      break;
+    }
+    case 'story-points': {
+      const pr = byId(id);
+      const b = pr && backlogOf(pr).find(x=>x.id===el.getAttribute('data-story'));
+      if(!b) break;
+      const i = STORY_POINTS.indexOf(storyPoints(b));
+      b.points = STORY_POINTS[(i+1) % STORY_POINTS.length];
+      persist();
+      break;
+    }
+    case 'story-sprint': {
+      const pr = byId(id);
+      const b = pr && backlogOf(pr).find(x=>x.id===el.getAttribute('data-story'));
+      if(b){ b.sprintId = el.value || null; persist(); }
+      break;
+    }
+    case 'story-stage': {
+      const pr = byId(id);
+      const b = pr && backlogOf(pr).find(x=>x.id===el.getAttribute('data-story'));
+      if(b){ b.stageId = el.value || null; persist(); }
+      break;
+    }
+    case 'story-edit': {
+      const pr = byId(id);
+      const b = pr && backlogOf(pr).find(x=>x.id===el.getAttribute('data-story'));
+      if(!b) break;
+      const next = window.prompt('Rename this backlog item', b.title);
+      if(next && next.trim()){ b.title = next.trim(); persist(); }
+      break;
+    }
+    case 'story-delete': {
+      const pr = byId(id);
+      if(!pr) break;
+      pr.backlog = backlogOf(pr).filter(x=>x.id!==el.getAttribute('data-story'));
+      persist();
+      break;
+    }
+    case 'add-sprint': { const pr = byId(id); if(pr) modalEditSprint(pr, null); break; }
+    case 'edit-sprint': {
+      const pr = byId(id);
+      const sp = pr && (pr.sprints||[]).find(x=>x.id===el.getAttribute('data-sprint'));
+      if(sp) modalEditSprint(pr, sp);
+      break;
+    }
+    case 'save-sprint': {
+      const pr = byId(id);
+      if(!pr) break;
+      const start = qs('#sp-start').value, end = qs('#sp-end').value;
+      if(!start || !end || start > end){ pushToast('A sprint needs a start on or before its end'); break; }
+      const sid = el.getAttribute('data-sprint');
+      const found = sid ? (pr.sprints||[]).find(x=>x.id===sid) : null;
+      const next = found || { id: uid() };
+      next.name = qs('#sp-name').value.trim() || 'Sprint';
+      next.goal = qs('#sp-goal').value.trim();
+      next.start = start; next.end = end;
+      if(!found){ pr.sprints = pr.sprints||[]; pr.sprints.push(next); }
+      closeModal(); persist();
+      break;
+    }
+    case 'delete-sprint': {
+      const pr = byId(id);
+      if(!pr) break;
+      const sid = el.getAttribute('data-sprint');
+      if(!window.confirm('Delete this sprint? Its items stay in the backlog, just unassigned.')) break;
+      pr.sprints = (pr.sprints||[]).filter(x=>x.id!==sid);
+      backlogOf(pr).forEach(b=>{ if(b.sprintId===sid) b.sprintId = null; });
+      if(ui.boardSprint[id]===sid) delete ui.boardSprint[id];
+      closeModal(); persist();
+      break;
+    }
+
     case 'add-risk': { const pr = byId(id); if(pr) modalEditRisk(pr, null); break; }
     case 'edit-risk': {
       const pr = byId(id);

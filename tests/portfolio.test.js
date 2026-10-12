@@ -259,6 +259,122 @@ const go = (page, v) => page.evaluate(x => handleAction('nav', { getAttribute: (
   await page.waitForTimeout(500);
   ok('  and shows beside the money', /ETB/.test(await page.locator('.view').innerText()));
 
+  console.log('\nAGILE — A BACKLOG INSTEAD OF A PLAN');
+  const agileId = await page.evaluate(() => {
+    const p = newItem({ type:'project', title:'Zipana', category:'Operations', priority:'high', isStarred:true });
+    p.method = 'agile';
+    persist();
+    return p.id;
+  });
+  await go(page, 'projects');
+  await page.locator('.project-card').filter({ hasText: 'Zipana' }).locator('.project-head').click();
+  await page.waitForTimeout(400);
+  ok('an agile project shows a board instead of milestones', await page.locator('.board-col').count() === 3,
+    await page.locator('.board-col').count());
+
+  for (const t of ['Sign-up screen', 'Payment hook']) {
+    await page.fill(`input[data-role="new-story"][data-id="${agileId}"]`, t);
+    await page.click(`[data-action="add-story"][data-id="${agileId}"]`);
+    await page.waitForTimeout(350);
+  }
+  ok('items go into the backlog', await page.evaluate(x => byId(x).backlog.length, agileId) === 2);
+  ok('  starting in To do', await page.evaluate(x => byId(x).backlog.every(b => b.status === 'todo'), agileId));
+
+  // Points step through the usual ladder.
+  const firstPoints = () => page.evaluate(x => byId(x).backlog[0].points, agileId);
+  const p0 = await firstPoints();
+  await page.locator('.story [data-action="story-points"]').first().click();
+  await page.waitForTimeout(350);
+  ok('points step on a tap', (await firstPoints()) !== p0, { was: p0, now: await firstPoints() });
+
+  // Moving an item right puts it in Doing, then Done. Take it from the column it
+  // is actually in — after the first move it is no longer the first card on the board.
+  const col = n => page.locator('.board-col').nth(n);
+  await col(0).locator('.story [data-action="story-move"][data-dir="1"]').first().click();
+  await page.waitForTimeout(350);
+  ok('an item moves to Doing', await page.evaluate(x => byId(x).backlog[0].status, agileId) === 'doing');
+  await col(1).locator('.story [data-action="story-move"][data-dir="1"]').first().click();
+  await page.waitForTimeout(350);
+  const done = await page.evaluate(x => byId(x).backlog.find(b => b.status === 'done'), agileId);
+  ok('  and on to Done', !!done, done && done.title);
+  ok('  stamped with when, which is what the burndown reads', !!(done && done.doneAt));
+  const agStat = await statOf(agileId);
+  ok('the project percentage now comes from the backlog', agStat.pct > 0 && agStat.pct < 100, agStat);
+
+  console.log('\nSPRINTS');
+  await page.click(`[data-action="add-sprint"][data-id="${agileId}"]`);
+  await page.waitForSelector('#sp-name');
+  await page.fill('#sp-name', 'Sprint 1');
+  await page.fill('#sp-goal', 'Get sign-up working');
+  await page.click('[data-action="save-sprint"]');
+  await page.waitForTimeout(500);
+  ok('a sprint is created', await page.evaluate(x => byId(x).sprints.length, agileId) === 1);
+  // Items added before the sprint existed are not in it; put them in.
+  await page.evaluate(x => { const p = byId(x); p.backlog.forEach(b => b.sprintId = p.sprints[0].id); persist(); }, agileId);
+  await page.waitForTimeout(400);
+  const body = await page.locator('.project-card').filter({ hasText: 'Zipana' }).locator('.project-body').innerText();
+  ok('  and the board says which one you are in', /Sprint 1/.test(body) && /Get sign-up working/.test(body),
+    body.split('\n').slice(0, 5));
+
+  console.log('\nTHE PIPELINE OFFERS THE NEXT BACKLOG ITEM');
+  await go(page, 'now');
+  const pipeline = await page.locator('.pipeline-row').allInnerTexts();
+  ok('a starred agile project reaches Now through its backlog',
+    pipeline.some(t => /Payment hook|Sign-up screen/.test(t)), pipeline);
+  await page.locator('.pipeline-row').filter({ hasText: /Payment hook|Sign-up screen/ }).first()
+    .locator('[data-action="toggle-pin"]').click();
+  await page.waitForTimeout(400);
+  const pinned = await page.evaluate(() => nowPins().filter(r => r.indexOf('st:') === 0));
+  ok('  and can be pinned', pinned.length === 1, pinned);
+  // Finishing it from Now closes the backlog item and frees the slot.
+  await page.locator('.focus-card').filter({ hasText: /Payment hook|Sign-up screen/ }).locator('.check').click();
+  await page.waitForTimeout(500);
+  ok('finishing it from Now closes the item',
+    await page.evaluate(x => byId(x).backlog.filter(b => b.status === 'done').length, agileId) === 2);
+  ok('  and frees the slot without replacing it',
+    (await page.evaluate(() => nowPins().filter(r => r.indexOf('st:') === 0))).length === 0);
+
+  console.log('\nBURNDOWN AND VELOCITY');
+  await page.evaluate(x => handleAction('open-project-report', { getAttribute: () => x }), agileId);
+  await page.waitForTimeout(600);
+  const built = await page.evaluate(() => (window.__charts || []).slice(-3));
+  ok('a burndown is drawn', built.some(c => c.type === 'line' && c.data.datasets.length === 2
+    && c.data.datasets[1].label === 'Plan'), built.map(c => c.type));
+  const burn = built.find(c => c.type === 'line' && c.data.datasets[1] && c.data.datasets[1].label === 'Plan');
+  ok('  its plan line runs from the full total down to nothing',
+    burn.data.datasets[1].data[0] > 0 && burn.data.datasets[1].data.slice(-1)[0] === 0, burn.data.datasets[1].data);
+  ok('  and the actual line stops at today rather than guessing',
+    burn.data.datasets[0].data.some(v => v === null), burn.data.datasets[0].data);
+  await page.click('.modal-actions [data-action="close-modal"]');
+  await page.waitForTimeout(300);
+
+  console.log('\nWINS — FINISHED WORK IS REPORTED AS FINISHED');
+  await page.evaluate(() => {
+    const DAY = 86400000;
+    const p = newItem({ type:'project', title:'Shipment cleared', category:'Operations' });
+    p.startDate = new Date(Date.now() - 40 * DAY).toISOString().slice(0, 10);
+    p.dueDate = new Date(Date.now() + 5 * DAY).toISOString().slice(0, 10);
+    p.budget = 100; p.actualCost = 80;
+    p.subtasks = [{ id:'w1', title:'Clear customs', done:true, effort:'L', doneAt:new Date().toISOString(), xpAwarded:true, pct:null, source:'manual' }];
+    p.status = 'done'; p.completedAt = new Date().toISOString();
+    persist();
+  });
+  await go(page, 'reports');
+  await page.click('[data-tab="wins"]');
+  await page.waitForTimeout(600);
+  const wins = await page.locator('.view').innerText();
+  ok('the finished project is there', /Shipment cleared/.test(wins), wins.split('\n').slice(0, 8));
+  ok('  counted in the headline', await page.locator('.win-hero-n').innerText() !== '0', await page.locator('.win-hero-n').innerText());
+  ok('  and credited for beating its date and its budget',
+    /on time/.test(wins) && /within budget/.test(wins), wins.split('\n').filter(l => /time|budget/.test(l)).slice(0, 3));
+  ok('  with a month-by-month strip', await page.locator('.spark-col').count() === 12, await page.locator('.spark-col').count());
+  const winDonut = await page.evaluate(() => (window.__charts || []).filter(c => c.type === 'doughnut').pop());
+  ok('  and a doughnut of which domain finished them', !!winDonut && winDonut.data.datasets[0].data.every(v => v > 0));
+  // A narrower window is allowed to be empty, and says so rather than looking broken.
+  await page.click('[data-action="wins-range"][data-range="week"]');
+  await page.waitForTimeout(500);
+  ok('narrowing the window still renders', await page.locator('.win-hero-n').count() === 1);
+
   console.log('\nTHE CHART STILL DEGRADES WITHOUT CHART.JS');
   const plainPage = await openApp(browser, { charts: false });
   await go(plainPage.page, 'reports');
