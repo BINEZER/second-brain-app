@@ -380,7 +380,12 @@
       /* A doughnut and the numbers behind it, side by side on a desktop and
          stacked on a phone — the legend is the readable half on a small screen. */
       .donut-wrap{display:flex;gap:18px;align-items:center;flex-wrap:wrap}
-      .donut-canvas{flex:0 0 160px;height:160px;width:160px;position:relative}
+      .donut-canvas{flex:0 0 160px;height:160px;width:160px;position:relative;display:flex;align-items:center;justify-content:center}
+      .donut-svg{width:100%;height:100%;transform:rotate(-90deg)}
+      .donut-arc{transition:stroke-width .12s}
+      .donut-middle{position:absolute;text-align:center;pointer-events:none}
+      .donut-total{font-family:'JetBrains Mono',monospace;font-size:17px;font-weight:700;line-height:1.1}
+      .donut-cap{font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--c-text-muted);margin-top:2px}
       .legend{list-style:none;margin:0;padding:0;flex:1 1 220px;min-width:0}
       .legend li{display:flex;align-items:center;gap:9px;padding:5px 0;font-size:13px;border-top:1px solid var(--c-border)}
       .legend li:first-child{border-top:none}
@@ -2389,7 +2394,7 @@ function render(){
   const app = qs('#app');
   const focusId = document.activeElement && document.activeElement.id;
   const caret = focusId && typeof document.activeElement.selectionStart==='number' ? document.activeElement.selectionStart : null;
-  donutJobs = [];
+  chartNoteShown = false;
   app.innerHTML = renderSidebar() + renderMain();
   wireGlobal();
   renderCharts();
@@ -3345,10 +3350,6 @@ const SERIES_REST  = '#94A3B8';
 const DONUT_CAP = 6;   // past six slices the eye gives up; the tail folds into one
 function seriesColors(){ return themeMode()==='dark' ? SERIES_DARK : SERIES_LIGHT; }
 
-/* Charts are built after the view's HTML exists, so the views queue what they
-   want drawn and renderCharts drains the queue. */
-let donutJobs = [];
-
 /* Biggest first, with everything past the cap folded into one honest slice. */
 function donutSlices(pairs, cap){
   const kept = pairs.filter(x=>x.value>0).sort((a,b)=>b.value-a.value);
@@ -3360,9 +3361,21 @@ function donutSlices(pairs, cap){
   return head;
 }
 
-/* A doughnut plus the numbers it is made of. The legend is not decoration: it is
-   what makes the slices readable without relying on colour, and on a phone it is
-   usually the part that actually gets read. */
+/* A doughnut plus the numbers it is made of.
+
+   Drawn as inline SVG rather than through Chart.js, on purpose. Chart.js comes
+   from a CDN, and on a phone on mobile data in Addis that script is the single
+   most likely thing in this page to fail — when it did, every pie quietly became
+   a list of numbers with no picture, which is exactly how this was reported.
+   A ring of arcs needs no library, no network and no canvas, so it is always
+   there. Each slice is a dash on one circle: with r = 15.915 the circumference
+   is 100, so a percentage is its own dash length.
+
+   The legend is not decoration either. In light mode the lighter slice colours
+   fall under 3:1 against the page, so the written numbers beside them are what
+   make the chart readable rather than decorative. */
+const DONUT_GAP = 0.8;   // a sliver of surface between slices, so they read as separate
+
 function donutCard(id, pairs, opts){
   opts = opts || {};
   const slices = donutSlices(pairs, opts.cap);
@@ -3373,13 +3386,36 @@ function donutCard(id, pairs, opts){
   // else takes the next series slot — by its place in the sorted list, so the
   // biggest slice is always slot 1 rather than whatever the data order happened to be.
   const colorOf = (x,i) => x.rest ? SERIES_REST : (x.color || cols[i % cols.length]);
-  if(chartsAvailable()) donutJobs.push({ id, slices, colors: slices.map(colorOf), fmt: opts.fmt||null });
+
+  let at = 0;
+  const arcs = slices.map((x,i)=>{
+    const share = x.value/total*100;
+    // One slice is a whole ring: a gap would leave a notch in a circle with no seam.
+    const len = slices.length===1 ? 100 : Math.max(0.6, share - DONUT_GAP);
+    const dash = `${len} ${100-len}`;
+    const offset = 25 - at;           // 25 puts the first slice's edge at twelve o'clock
+    at += share;
+    return `<circle class="donut-arc" cx="21" cy="21" r="15.915" fill="none"
+      stroke="${colorOf(x,i)}" stroke-width="5.5" stroke-dasharray="${dash}" stroke-dashoffset="${offset}">
+      <title>${esc(x.label)}: ${esc(String(opts.fmt? opts.fmt(x.value) : x.value))} (${Math.round(share)}%)</title>
+    </circle>`;
+  }).join('');
+
   return `
     <div class="card donut-card" style="margin-bottom:18px">
       ${opts.title? `<div style="font-weight:600;font-size:14.5px;margin-bottom:2px">${opts.title}</div>`:''}
       ${opts.sub? `<div class="view-sub" style="margin-bottom:12px">${opts.sub}</div>`:''}
       <div class="donut-wrap">
-        ${chartsAvailable()? `<div class="donut-canvas"><canvas id="${id}"></canvas></div>`:''}
+        <div class="donut-canvas">
+          <svg viewBox="0 0 42 42" class="donut-svg" role="img" aria-label="${esc(opts.title||'Breakdown')}">
+            <circle cx="21" cy="21" r="15.915" fill="none" stroke="var(--c-surface-alt)" stroke-width="5.5"/>
+            ${arcs}
+          </svg>
+          <div class="donut-middle">
+            <div class="donut-total">${opts.fmt? opts.fmt(total) : total}</div>
+            <div class="donut-cap">in all</div>
+          </div>
+        </div>
         <ul class="legend">
           ${slices.map((x,i)=>`<li>
             <i style="background:${colorOf(x,i)}"></i>
@@ -3389,23 +3425,6 @@ function donutCard(id, pairs, opts){
         </ul>
       </div>
     </div>`;
-}
-
-function drawDonuts(){
-  donutJobs.forEach(job=>{
-    const el = document.getElementById(job.id);
-    if(!el) return;
-    charts[job.id] = new Chart(el, {
-      type:'doughnut',
-      data:{ labels: job.slices.map(x=>x.label),
-             datasets:[{ data: job.slices.map(x=>x.value), backgroundColor: job.colors,
-                         borderColor: getComputedStyle(document.documentElement).getPropertyValue('--c-surface').trim()||'#fff',
-                         borderWidth: 2 }] },
-      options:{ responsive:true, maintainAspectRatio:false, cutout:'62%',
-        plugins:{ legend:{ display:false },
-          tooltip:{ callbacks:{ label:(c)=>` ${c.label}: ${job.fmt? job.fmt(c.raw) : c.raw}` } } } }
-    });
-  });
 }
 
 function chartTextColor(){ return (getComputedStyle(document.documentElement).getPropertyValue('--c-text-secondary')||'').trim() || '#475569'; }
@@ -3431,15 +3450,25 @@ function projectPct(p){ const st = projectStats(p); return st.pct==null ? 0 : st
 const HEALTH_BAR_COLOR = { done:'#10B981', ahead:'#10B981', ontrack:'#06B6D4', nodate:'#94A3B8', notstarted:'#94A3B8', risk:'#F59E0B', behind:'#F43F5E', overdue:'#F43F5E', noplan:'#CBD5E1' };
 /* Chart.js comes from a CDN — render no card at all rather than an empty box when it is unavailable. */
 function chartsAvailable(){ return typeof Chart!=='undefined'; }
+/* A graph that cannot be drawn should say so once, not vanish. Chart.js comes
+   from a CDN; when that fails every line and bar silently disappeared and the
+   page just looked thinner. The doughnuts no longer depend on it at all. */
+let chartNoteShown = false;
+function chartMissingNote(){
+  if(!chartsAvailable() && !chartNoteShown){
+    chartNoteShown = true;
+    return `<div class="view-sub" style="margin-bottom:14px">The graph library did not load on this device, so the line and bar charts are not drawn. Every figure they would show is in the numbers and tables on this page. It is fetched from the internet — a reload on a better connection usually brings it back.</div>`;
+  }
+  return '';
+}
 function chartCard(id, height, extraStyle){
-  if(!chartsAvailable()) return '';
+  if(!chartsAvailable()) return chartMissingNote();
   return `<div class="card" style="margin-bottom:18px;height:${height}px${extraStyle?';'+extraStyle:''}"><canvas id="${id}"></canvas></div>`;
 }
 
 function renderCharts(){
   destroyCharts();
   if(typeof Chart==='undefined') return;
-  drawDonuts();
 
   const areasCanvas = document.getElementById('chart-areas');
   if(areasCanvas){
@@ -4205,7 +4234,7 @@ function renderReportsTimelineView(){
       <span style="align-self:center;color:var(--c-text-muted)">to</span>
       <input type="date" value="${ui.historyCustomTo||''}" data-action-change="history-custom-to"/>
     </div>` : ''}
-    ${filtered.length? `<div class="card" style="margin-bottom:14px;height:140px"><canvas id="chart-timeline"></canvas></div>` : ''}
+    ${filtered.length && chartsAvailable()? `<div class="card" style="margin-bottom:14px;height:140px"><canvas id="chart-timeline"></canvas></div>` : chartMissingNote()}
     <div class="view-sub" style="margin:-6px 0 12px">${filtered.length} completed</div>
     ${filtered.length? filtered.map(renderHistoryRow).join('') : `<div class="empty">No tasks completed ${rangeLabel}.</div>`}
 
@@ -5120,7 +5149,7 @@ function modalProjectDetail(p){
         ${st.notStarted?'<b>Not started yet</b> — the schedule clock begins on the start date.':''}
       </div>
       ${chartsAvailable()? `<div class="section-label">Completion trend</div>
-      <div style="height:140px;margin-bottom:6px"><canvas id="chart-project-trend"></canvas></div>` : ''}
+      <div style="height:140px;margin-bottom:6px"><canvas id="chart-project-trend"></canvas></div>` : chartMissingNote()}
       <div class="view-sub" style="margin-bottom:16px">${chartsAvailable()?'Rebuilt from when each step was closed.':''}${hist.undated? ` ${hist.undated} step${hist.undated===1?' was':'s were'} completed before dates were recorded, so ${hist.undated===1?'it counts':'they count'} from the start of the line.`:''}</div>
     ` : `
       <div class="view-sub" style="margin-bottom:16px">

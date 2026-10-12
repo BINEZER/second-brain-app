@@ -224,29 +224,40 @@ const go = (page, v) => page.evaluate(x => handleAction('nav', { getAttribute: (
   ok('half a milestone moves the project half a milestone', pctAfter > pctBefore, { pctBefore, pctAfter });
   ok('  and says so on the row', /50%/.test(await page.locator('.project-body').first().innerText()));
 
-  console.log('\nDOUGHNUTS — WHAT THE CHART IS ACTUALLY ASKED TO DRAW');
+  console.log('\nDOUGHNUTS — DRAWN WITHOUT A LIBRARY, SO THEY ARE ALWAYS THERE');
+  /* These were Chart.js canvases, and on a phone whose CDN request failed they
+     silently became a list of numbers with no picture — which is how it was
+     reported. They are inline SVG now: no library, no network, no canvas. */
   await go(page, 'reports');
   await page.click('[data-tab="areas"]');
   await page.waitForTimeout(500);
-  const donut = await page.evaluate(() => (window.__charts || []).filter(c => c.type === 'doughnut').pop());
-  ok('a doughnut is drawn for where the open effort sits', !!donut, donut && donut.type);
-  ok('  with no more than six slices', donut.data.labels.length <= 6, donut.data.labels);
-  ok('  every slice a positive number', donut.data.datasets[0].data.every(v => v > 0), donut.data.datasets[0].data);
-  ok('  in the fixed series order, biggest first',
-    donut.data.datasets[0].backgroundColor[0].toLowerCase() === '#2a78d6', donut.data.datasets[0].backgroundColor);
-  ok('  sorted', donut.data.datasets[0].data.slice(1).every((v, i) => v <= donut.data.datasets[0].data[i]), donut.data.datasets[0].data);
+  const ring = page.locator('.donut-svg').first();
+  ok('a doughnut is drawn', await ring.count() === 1);
+  const arcs = await page.locator('.donut-svg .donut-arc').evaluateAll(els => els.map(el => ({
+    len: parseFloat(el.getAttribute('stroke-dasharray').split(' ')[0]),
+    color: el.getAttribute('stroke'),
+    label: el.querySelector('title').textContent,
+  })));
+  ok('  one arc per slice, six at most', arcs.length > 0 && arcs.length <= 6, arcs.length);
+  ok('  biggest first', arcs.every((a, i) => i === 0 || a.len <= arcs[i - 1].len), arcs.map(a => a.len));
+  ok('  in the fixed series order', arcs[0].color.toLowerCase() === '#2a78d6', arcs.map(a => a.color));
+  ok('  and the ring adds up to the whole', Math.abs(arcs.reduce((s2, a) => s2 + a.len, 0) - (100 - 0.8 * arcs.length)) < 1.5,
+    arcs.reduce((s2, a) => s2 + a.len, 0));
+  ok('  each arc says what it is, for a hover and for a screen reader',
+    arcs.every(a => /: .+\(\d+%\)/.test(a.label)), arcs.map(a => a.label));
+  ok('  with the total in the middle', /\d/.test(await page.locator('.donut-total').first().innerText()),
+    await page.locator('.donut-total').first().innerText());
   // The legend is what carries the numbers when the colour cannot.
   const legend = await page.locator('.legend li').allInnerTexts();
-  ok('  and a written legend repeats them', legend.length === donut.data.labels.length, legend);
+  ok('  and a written legend repeats them', legend.length === arcs.length, legend);
   ok('    with a share each', legend.every(l => /%/.test(l)), legend);
 
   await page.click('[data-tab="projects"]');
   await page.waitForTimeout(500);
-  const health = await page.evaluate(() => (window.__charts || []).filter(c => c.type === 'doughnut').pop());
-  ok('the health mix is a doughnut too', !!health);
+  const healthArcs = await page.locator('.donut-svg .donut-arc').evaluateAll(els => els.map(el => el.getAttribute('stroke')));
+  ok('the health mix is a doughnut too', healthArcs.length > 0);
   ok('  coloured by verdict, not by series slot',
-    health.data.datasets[0].backgroundColor.every(c => ['#10B981', '#06B6D4', '#94A3B8', '#F59E0B', '#F43F5E', '#CBD5E1'].includes(c)),
-    health.data.datasets[0].backgroundColor);
+    healthArcs.every(c => ['#10B981', '#06B6D4', '#94A3B8', '#F59E0B', '#F43F5E', '#CBD5E1'].includes(c)), healthArcs);
 
   console.log('\nCURRENCY IS A LABEL, NOT A CONVERSION');
   await go(page, 'settings');
@@ -368,19 +379,30 @@ const go = (page, v) => page.evaluate(x => handleAction('nav', { getAttribute: (
   ok('  and credited for beating its date and its budget',
     /on time/.test(wins) && /within budget/.test(wins), wins.split('\n').filter(l => /time|budget/.test(l)).slice(0, 3));
   ok('  with a month-by-month strip', await page.locator('.spark-col').count() === 12, await page.locator('.spark-col').count());
-  const winDonut = await page.evaluate(() => (window.__charts || []).filter(c => c.type === 'doughnut').pop());
-  ok('  and a doughnut of which domain finished them', !!winDonut && winDonut.data.datasets[0].data.every(v => v > 0));
+  ok('  and a doughnut of which domain finished them',
+    await page.locator('.donut-svg .donut-arc').count() > 0, await page.locator('.donut-svg .donut-arc').count());
   // A narrower window is allowed to be empty, and says so rather than looking broken.
   await page.click('[data-action="wins-range"][data-range="week"]');
   await page.waitForTimeout(500);
   ok('narrowing the window still renders', await page.locator('.win-hero-n').count() === 1);
 
-  console.log('\nTHE CHART STILL DEGRADES WITHOUT CHART.JS');
+  console.log('\nWITHOUT CHART.JS THE PIES SURVIVE AND THE REST SAYS SO');
   const plainPage = await openApp(browser, { charts: false });
+  // A fresh context has its own empty storage, so give it something to chart.
+  await go(plainPage.page, 'settings');
+  await plainPage.page.fill('#import-input', FIXTURE);
+  await plainPage.page.click('[data-action="import-preview"]');
+  await plainPage.page.click('[data-action="import-apply"]');
+  await plainPage.page.waitForTimeout(700);
   await go(plainPage.page, 'reports');
   await plainPage.page.click('[data-tab="areas"]');
   await plainPage.page.waitForTimeout(400);
-  ok('no canvas is rendered when the library is missing', await plainPage.page.locator('.donut-canvas').count() === 0);
+  ok('the doughnut is still drawn with no library at all',
+    await plainPage.page.locator('.donut-svg .donut-arc').count() > 0,
+    await plainPage.page.locator('.donut-svg .donut-arc').count());
+  const text = await plainPage.page.locator('.view').innerText();
+  ok('  and the line and bar charts explain their absence rather than vanishing',
+    /graph library did not load/.test(text), text.split('\n').filter(l => /library/.test(l)));
   await plainPage.ctx.close();
 
   console.log('\nTHEME IS PER DEVICE');
