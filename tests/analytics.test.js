@@ -346,5 +346,213 @@ reset();
   same('a fresh install starts with an empty archive list', __in('defaultRoot')().state.settings.inactiveProjects, []);
 })();
 
+/* ---------- 10. levels, money and risk ----------
+   The parts a project tracker has that a to-do list does not. All of it is
+   optional: a project that sets none of it reports exactly what it used to. */
+reset();
+(function(){
+  const same = (name,a,b)=>eq(name, JSON.stringify(a), JSON.stringify(b));
+  const mk = over => newItem(Object.assign({ type:'project', title:'P', category:'Operations' }, over));
+
+  // A portfolio over two projects, weighted 1 and 3.
+  const port = mk({ title:'Intel Group', kind:'portfolio' });
+  const a = mk({ title:'Small', parentId: port.id, weight: 1 });
+  const b = mk({ title:'Big',   parentId: port.id, weight: 3 });
+  a.subtasks = [{id:'a1',title:'x',done:true, effort:'M',doneAt:iso(now-DAY),xpAwarded:true},
+                {id:'a2',title:'y',done:false,effort:'M',doneAt:null,xpAwarded:false}];   // 50%
+  b.subtasks = [{id:'b1',title:'x',done:false,effort:'M',doneAt:null,xpAwarded:false},
+                {id:'b2',title:'y',done:false,effort:'M',doneAt:null,xpAwarded:false}];   // 0%
+  eq('a child reports its own completion', projectStats(a).pct, 50);
+  // 1×50 + 3×0 over a total weight of 4 = 12.5, rounded to 13.
+  eq('the portfolio is its children by weight', projectStats(port).pct, 13);
+  eq('  and knows it is a container', projectStats(port).container, true);
+  eq('  with the children under it', projectStats(port).total, 2);
+  eq('  and their effort added up', projectStats(port).weightTotal, 8);
+  // Weight is relative: double both and nothing moves.
+  a.weight = 2; b.weight = 6;
+  eq('weights are relative, not absolute', projectStats(port).pct, 13);
+
+  // A part-done milestone counts for its share, not nothing and not everything.
+  a.subtasks[1].pct = 50;
+  eq('a half-done milestone counts half', projectStats(a).pct, 75);
+  eq('  and the fractional effort is kept', projectStats(a).weightDone, 3);
+  a.subtasks[1].pct = null;
+
+  /* ---- earned value ---- */
+  reset();
+  const m = mk({ title:'Lift install', startDate: isoDate(now-50*DAY), dueDate: isoDate(now+50*DAY) });
+  m.subtasks = [{id:'m1',title:'x',done:true, effort:'M',doneAt:iso(now-DAY),xpAwarded:true},
+                {id:'m2',title:'y',done:false,effort:'M',doneAt:null,xpAwarded:false}];
+  eq('no budget, no money figures', projectStats(m).cpi, null);
+  m.budget = 100; m.actualCost = 80;
+  let st = projectStats(m);
+  eq('value earned is the budget times completion', st.earned, 50);
+  eq('cost index is earned over spent', Math.round(st.cpi*100)/100, 0.63);
+  eq('forecast total is budget over cost index', Math.round(st.forecast), 160);
+  ok('schedule index compares completion with time spent', st.spi>0.9 && st.spi<1.1, st.spi);
+
+  /* ---- cost and risk can only make health worse ---- */
+  reset();
+  const h = mk({ title:'On plan', startDate: isoDate(now-50*DAY), dueDate: isoDate(now+50*DAY) });
+  h.subtasks = [{id:'h1',title:'x',done:true, effort:'M',doneAt:iso(now-DAY),xpAwarded:true},
+                {id:'h2',title:'y',done:false,effort:'M',doneAt:null,xpAwarded:false}];
+  const baseline = projectStats(h).health;
+  ok('a project halfway through, halfway done, is not in trouble', baseline==='ontrack'||baseline==='ahead', baseline);
+  h.budget = 100; h.actualCost = 200;        // cost index 0.25
+  eq('burning twice the budget is not "on track"', projectStats(h).health, 'behind');
+  h.budget = null; h.actualCost = null;
+  h.risks = [{id:'r1',type:'risk',title:'Crane',probability:4,impact:5,status:'open',owner:'',response:''}];
+  eq('a live risk scoring 20 drags it to off track', projectStats(h).health, 'behind');
+  h.risks[0].status = 'closed';
+  eq('a closed risk drags nothing', projectStats(h).health, baseline);
+  h.risks = [{id:'r2',type:'dependency',title:'Port',probability:5,impact:5,status:'open',owner:'',response:''}];
+  eq('only risks and issues score — assumptions and dependencies do not', projectStats(h).health, baseline);
+  eq('  though they are still logged', h.risks.length, 1);
+  h.risks = [{id:'r3',type:'issue',title:'Customs',probability:3,impact:4,status:'open',owner:'',response:''}];
+  eq('a live issue scoring 12 makes it at risk', projectStats(h).health, 'risk');
+  // The owner's own read beats the arithmetic.
+  h.healthOverride = 'ontrack';
+  eq('saying so by hand wins', projectStats(h).health, 'ontrack');
+  h.healthOverride = null;
+
+  /* ---- the tree cannot eat itself ---- */
+  reset();
+  const top = mk({ title:'Top', kind:'portfolio' });
+  const mid = mk({ title:'Mid', kind:'program', parentId: top.id });
+  const leaf = mk({ title:'Leaf', parentId: mid.id });
+  same('a programme may sit under a portfolio only',
+    __in('parentOptions')(mid).map(x=>x.title), ['Top']);
+  same('a project may sit under either, but never under itself or its own children',
+    __in('parentOptions')(top).map(x=>x.title), []);
+  ok('a project is offered both containers', __in('parentOptions')(leaf).map(x=>x.title).sort().join(',')==='Mid,Top');
+  same('the chain reads from the top down', __in('ancestry')(leaf).map(x=>x.title), ['Top','Mid']);
+  // A loop is bad data, not a reason to hang the page.
+  top.parentId = leaf.id;
+  ok('a loop in the tree still returns', typeof projectStats(top).pct !== 'undefined');
+  ok('  and the chain stops rather than spinning', __in('ancestry')(leaf).length <= 8);
+  top.parentId = null;
+
+  /* ---- part-to-whole slices ---- */
+  const slices = __in('donutSlices')([
+    {label:'a',value:10},{label:'b',value:9},{label:'c',value:8},{label:'d',value:7},
+    {label:'e',value:6},{label:'f',value:5},{label:'g',value:4},{label:'h',value:0}
+  ]);
+  eq('a doughnut never shows more than six slices', slices.length, 6);
+  eq('  biggest first', slices[0].label, 'a');
+  eq('  with the tail folded into one honest slice', slices[5].value, 9);
+  ok('  which says how many it stands for', /Everything else \(2\)/.test(slices[5].label), slices[5].label);
+  eq('  and empty categories never take a slot', slices.filter(x=>x.value===0).length, 0);
+})();
+
+/* ---------- 11. agile: backlog, sprints, burndown, velocity ---------- */
+reset();
+(function(){
+  const same = (name,a,b)=>eq(name, JSON.stringify(a), JSON.stringify(b));
+  const mk = over => newItem(Object.assign({ type:'project', title:'App', category:'Operations' }, over));
+  const story = (id, points, status, sprintId, stageId) =>
+    ({ id, title:id, points, status, sprintId:sprintId||null, stageId:stageId||null,
+       doneAt: status==='done' ? iso(now-DAY) : null });
+
+  const bp = __in('backlogProgress');
+  eq('an empty backlog is 0%', bp([]), 0);
+  eq('points decide when anything is estimated', Math.round(bp([story('a',3,'done'), story('b',1,'todo')])), 75);
+  eq('  head count decides when nothing is', Math.round(bp([story('a',0,'done'), story('b',0,'todo')])), 50);
+  eq('  "doing" is not "done"', Math.round(bp([story('a',1,'doing'), story('b',1,'todo')])), 0);
+
+  // An agile project's completion is its backlog, and points are its weight.
+  const ag = mk({ title:'Zipana', method:'agile' });
+  ag.backlog = [story('a',3,'done'), story('b',1,'todo'), story('c',4,'todo')];
+  let st = projectStats(ag);
+  eq('an agile project reports its backlog', st.pct, 38);
+  eq('  with points as its effort weight', st.weightTotal, 8);
+  eq('  and the finished points closed', st.weightDone, 3);
+  ok('  so it still has a plan to measure', st.hasPlan === true);
+
+  // Hybrid: one milestone takes its figure from the items assigned to it.
+  const hy = mk({ title:'Lift upgrade', method:'hybrid' });
+  hy.subtasks = [
+    { id:'m1', title:'Build', done:false, effort:'M', doneAt:null, xpAwarded:false, pct:null, source:'backlog' },
+    { id:'m2', title:'Handover', done:false, effort:'M', doneAt:null, xpAwarded:false, pct:null, source:'manual' }
+  ];
+  hy.backlog = [story('s1',1,'done',null,'m1'), story('s2',1,'todo',null,'m1'), story('s3',5,'todo',null,'m2')];
+  st = projectStats(hy);
+  // m1 is half done by its two items; m2 is manual and untouched. 2×0.5 of 4 = 25%.
+  eq('a backlog-driven milestone takes its share from its items', st.pct, 25);
+  ok('  and an item assigned elsewhere does not count towards it',
+    Math.abs(projectStats(hy).weightDone - 1) < 0.001, projectStats(hy).weightDone);
+  hy.subtasks[0].source = 'manual';
+  eq('switching it back to manual makes it a plain tick again', projectStats(hy).pct, 0);
+
+  /* ---- sprints ---- */
+  reset();
+  const sp = mk({ title:'Sprint project', method:'agile' });
+  const d = n => isoDate(now + n*DAY);
+  sp.sprints = [
+    { id:'s1', name:'Sprint 1', goal:'', start:d(-28), end:d(-15) },
+    { id:'s2', name:'Sprint 2', goal:'', start:d(-14), end:d(-1) },
+    { id:'s3', name:'Sprint 3', goal:'', start:d(0),   end:d(13) },
+    { id:'s4', name:'Sprint 4', goal:'', start:d(14),  end:d(27) }
+  ];
+  sp.backlog = [
+    story('a',3,'done','s1'), story('b',5,'done','s2'), story('c',2,'done','s2'),
+    story('d',8,'todo','s3'), story('e',3,'doing','s3')
+  ];
+  eq('the active sprint is the one today falls inside', __in('activeSprint')(sp).id, 's3');
+  same('its tally counts only its own items', __in('sprintTally')(sp,'s3'), { items:2, total:11, done:0 });
+  same('velocity is the points finished in each sprint that has started',
+    __in('velocity')(sp).map(x=>[x.sprint.id, x.done]), [['s1',3],['s2',7],['s3',0]]);
+  ok('  a sprint that has not started yet is not counted',
+    __in('velocity')(sp).every(x=>x.sprint.id!=='s4'));
+
+  const burn = __in('burndown')(sp, sp.sprints[2]);
+  eq('burndown starts at the sprint total', burn.total, 11);
+  eq('  the plan line starts full', burn.points[0].ideal, 11);
+  eq('  and ends empty', burn.points[burn.points.length-1].ideal, 0);
+  eq('  today has an actual', burn.points[0].actual, 11);
+  eq('  tomorrow does not', burn.points[burn.points.length-1].actual, null);
+
+  // A backlog item can be the thing you pin to Now.
+  const ref = __in('storyRef')(sp.id, 'e');
+  ok('a backlog item has a focus reference', __in('isStoryRef')(ref));
+  const f = __in('resolveFocus')(ref);
+  eq('  which resolves to the item', f && f.kind, 'story');
+  eq('  carrying its title', f && f.title, 'e');
+  eq('the pipeline offers what is being worked on first', __in('nextStory')(sp).id, 'e');
+})();
+
+/* ---------- 12. wins: what finished ---------- */
+reset();
+(function(){
+  const mk = over => newItem(Object.assign({ type:'project', title:'P', category:'Operations' }, over));
+  const d = n => isoDate(now + n*DAY);
+
+  const won = mk({ title:'Shipment cleared', status:'done', completedAt: iso(now-5*DAY),
+                   startDate: d(-40), dueDate: d(-2), budget: 100, actualCost: 80 });
+  won.subtasks = [{id:'w1',title:'a',done:true,effort:'L',doneAt:iso(now-6*DAY),xpAwarded:true},
+                  {id:'w2',title:'b',done:true,effort:'S',doneAt:iso(now-5*DAY),xpAwarded:true}];
+  const late = mk({ title:'Late one', status:'done', completedAt: iso(now-3*DAY),
+                    startDate: d(-40), dueDate: d(-10), budget: 100, actualCost: 150 });
+  const running = mk({ title:'Still going', startDate: d(-20) });
+  running.subtasks = [{id:'r1',title:'a',done:true,effort:'M',doneAt:iso(now-2*DAY),xpAwarded:true},
+                      {id:'r2',title:'b',done:false,effort:'M',doneAt:null,xpAwarded:false}];
+
+  const w = __in('winsData')('quarter');
+  eq('finished projects are reported', w.delivered.length, 2);
+  eq('  newest first', w.delivered[0].p.title, 'Late one');
+  const shipment = w.delivered.find(x=>x.p.title==='Shipment cleared');
+  eq('  with the steps behind it', shipment.steps, 2);
+  eq('  and the effort they carried', shipment.effort, 4);
+  eq('  marked on time when it beat its due date', shipment.onTime, true);
+  eq('  and within budget when it did', shipment.underBudget, true);
+  eq('late and over shows as both', w.delivered.find(x=>x.p.title==='Late one').onTime, false);
+  eq('  ', w.delivered.find(x=>x.p.title==='Late one').underBudget, false);
+  eq('a project still running is not a delivery', w.delivered.filter(x=>x.p.title==='Still going').length, 0);
+  eq('  but its closed steps still count as movement', w.advanced.length, 1);
+  eq('  and towards the headline', w.steps, 3);
+  // The window matters: a win from last year is not this week's win.
+  eq('a narrow window excludes older wins', __in('winsData')('week').delivered.length, 0);
+  ok('months are reported for a year', __in('winsByMonth')().length === 12);
+})();
+
 console.log(`analytics: ${passes} passed, ${fails} failed`);
 process.exit(fails?1:0);
