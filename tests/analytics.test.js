@@ -346,5 +346,103 @@ reset();
   same('a fresh install starts with an empty archive list', __in('defaultRoot')().state.settings.inactiveProjects, []);
 })();
 
+/* ---------- 10. levels, money and risk ----------
+   The parts a project tracker has that a to-do list does not. All of it is
+   optional: a project that sets none of it reports exactly what it used to. */
+reset();
+(function(){
+  const same = (name,a,b)=>eq(name, JSON.stringify(a), JSON.stringify(b));
+  const mk = over => newItem(Object.assign({ type:'project', title:'P', category:'Operations' }, over));
+
+  // A portfolio over two projects, weighted 1 and 3.
+  const port = mk({ title:'Intel Group', kind:'portfolio' });
+  const a = mk({ title:'Small', parentId: port.id, weight: 1 });
+  const b = mk({ title:'Big',   parentId: port.id, weight: 3 });
+  a.subtasks = [{id:'a1',title:'x',done:true, effort:'M',doneAt:iso(now-DAY),xpAwarded:true},
+                {id:'a2',title:'y',done:false,effort:'M',doneAt:null,xpAwarded:false}];   // 50%
+  b.subtasks = [{id:'b1',title:'x',done:false,effort:'M',doneAt:null,xpAwarded:false},
+                {id:'b2',title:'y',done:false,effort:'M',doneAt:null,xpAwarded:false}];   // 0%
+  eq('a child reports its own completion', projectStats(a).pct, 50);
+  // 1×50 + 3×0 over a total weight of 4 = 12.5, rounded to 13.
+  eq('the portfolio is its children by weight', projectStats(port).pct, 13);
+  eq('  and knows it is a container', projectStats(port).container, true);
+  eq('  with the children under it', projectStats(port).total, 2);
+  eq('  and their effort added up', projectStats(port).weightTotal, 8);
+  // Weight is relative: double both and nothing moves.
+  a.weight = 2; b.weight = 6;
+  eq('weights are relative, not absolute', projectStats(port).pct, 13);
+
+  // A part-done milestone counts for its share, not nothing and not everything.
+  a.subtasks[1].pct = 50;
+  eq('a half-done milestone counts half', projectStats(a).pct, 75);
+  eq('  and the fractional effort is kept', projectStats(a).weightDone, 3);
+  a.subtasks[1].pct = null;
+
+  /* ---- earned value ---- */
+  reset();
+  const m = mk({ title:'Lift install', startDate: isoDate(now-50*DAY), dueDate: isoDate(now+50*DAY) });
+  m.subtasks = [{id:'m1',title:'x',done:true, effort:'M',doneAt:iso(now-DAY),xpAwarded:true},
+                {id:'m2',title:'y',done:false,effort:'M',doneAt:null,xpAwarded:false}];
+  eq('no budget, no money figures', projectStats(m).cpi, null);
+  m.budget = 100; m.actualCost = 80;
+  let st = projectStats(m);
+  eq('value earned is the budget times completion', st.earned, 50);
+  eq('cost index is earned over spent', Math.round(st.cpi*100)/100, 0.63);
+  eq('forecast total is budget over cost index', Math.round(st.forecast), 160);
+  ok('schedule index compares completion with time spent', st.spi>0.9 && st.spi<1.1, st.spi);
+
+  /* ---- cost and risk can only make health worse ---- */
+  reset();
+  const h = mk({ title:'On plan', startDate: isoDate(now-50*DAY), dueDate: isoDate(now+50*DAY) });
+  h.subtasks = [{id:'h1',title:'x',done:true, effort:'M',doneAt:iso(now-DAY),xpAwarded:true},
+                {id:'h2',title:'y',done:false,effort:'M',doneAt:null,xpAwarded:false}];
+  const baseline = projectStats(h).health;
+  ok('a project halfway through, halfway done, is not in trouble', baseline==='ontrack'||baseline==='ahead', baseline);
+  h.budget = 100; h.actualCost = 200;        // cost index 0.25
+  eq('burning twice the budget is not "on track"', projectStats(h).health, 'behind');
+  h.budget = null; h.actualCost = null;
+  h.risks = [{id:'r1',type:'risk',title:'Crane',probability:4,impact:5,status:'open',owner:'',response:''}];
+  eq('a live risk scoring 20 drags it to off track', projectStats(h).health, 'behind');
+  h.risks[0].status = 'closed';
+  eq('a closed risk drags nothing', projectStats(h).health, baseline);
+  h.risks = [{id:'r2',type:'dependency',title:'Port',probability:5,impact:5,status:'open',owner:'',response:''}];
+  eq('only risks and issues score — assumptions and dependencies do not', projectStats(h).health, baseline);
+  eq('  though they are still logged', h.risks.length, 1);
+  h.risks = [{id:'r3',type:'issue',title:'Customs',probability:3,impact:4,status:'open',owner:'',response:''}];
+  eq('a live issue scoring 12 makes it at risk', projectStats(h).health, 'risk');
+  // The owner's own read beats the arithmetic.
+  h.healthOverride = 'ontrack';
+  eq('saying so by hand wins', projectStats(h).health, 'ontrack');
+  h.healthOverride = null;
+
+  /* ---- the tree cannot eat itself ---- */
+  reset();
+  const top = mk({ title:'Top', kind:'portfolio' });
+  const mid = mk({ title:'Mid', kind:'program', parentId: top.id });
+  const leaf = mk({ title:'Leaf', parentId: mid.id });
+  same('a programme may sit under a portfolio only',
+    __in('parentOptions')(mid).map(x=>x.title), ['Top']);
+  same('a project may sit under either, but never under itself or its own children',
+    __in('parentOptions')(top).map(x=>x.title), []);
+  ok('a project is offered both containers', __in('parentOptions')(leaf).map(x=>x.title).sort().join(',')==='Mid,Top');
+  same('the chain reads from the top down', __in('ancestry')(leaf).map(x=>x.title), ['Top','Mid']);
+  // A loop is bad data, not a reason to hang the page.
+  top.parentId = leaf.id;
+  ok('a loop in the tree still returns', typeof projectStats(top).pct !== 'undefined');
+  ok('  and the chain stops rather than spinning', __in('ancestry')(leaf).length <= 8);
+  top.parentId = null;
+
+  /* ---- part-to-whole slices ---- */
+  const slices = __in('donutSlices')([
+    {label:'a',value:10},{label:'b',value:9},{label:'c',value:8},{label:'d',value:7},
+    {label:'e',value:6},{label:'f',value:5},{label:'g',value:4},{label:'h',value:0}
+  ]);
+  eq('a doughnut never shows more than six slices', slices.length, 6);
+  eq('  biggest first', slices[0].label, 'a');
+  eq('  with the tail folded into one honest slice', slices[5].value, 9);
+  ok('  which says how many it stands for', /Everything else \(2\)/.test(slices[5].label), slices[5].label);
+  eq('  and empty categories never take a slot', slices.filter(x=>x.value===0).length, 0);
+})();
+
 console.log(`analytics: ${passes} passed, ${fails} failed`);
 process.exit(fails?1:0);

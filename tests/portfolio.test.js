@@ -1,0 +1,295 @@
+'use strict';
+/*
+  Portfolio, programme and project — the tracker half of the app.
+
+  These are the parts brought over from the standalone project tracker: levels
+  that roll up, budgets with earned value, a RAID log that feeds health, custom
+  details, an activity log, part-done milestones, and the doughnuts that report
+  them. Every one is optional, so the first thing checked is that a project
+  which uses none of them still looks exactly like it did.
+
+  Chart.js comes from a CDN the test environment cannot reach, so a stub records
+  what the app asks to be drawn. That is the right boundary anyway: what needs
+  testing is the data and colours handed to the chart, not Chart.js itself.
+*/
+const { spawn } = require('child_process');
+const path = require('path');
+const http = require('http');
+
+let chromium;
+try { ({ chromium } = require('playwright')); }
+catch (e) { ({ chromium } = require('/opt/node22/lib/node_modules/playwright')); }
+
+const ROOT = path.join(__dirname, '..');
+const PORT = process.env.PORT || 8791;
+const BASE = `http://localhost:${PORT}/`;
+const FIXTURE = require('fs').readFileSync(path.join(__dirname, 'fixtures', 'sample-import.json'), 'utf8');
+
+let fails = 0;
+const ok = (n, c, x) => {
+  console.log((c ? '  ok   ' : '  FAIL ') + n + (x !== undefined ? '  ' + JSON.stringify(x) : ''));
+  if (!c) fails++;
+};
+
+function waitForServer(tries = 40) {
+  return new Promise((resolve, reject) => {
+    const attempt = n => {
+      http.get(BASE, res => { res.resume(); resolve(); })
+        .on('error', () => n <= 0 ? reject(new Error('server never came up')) : setTimeout(() => attempt(n - 1), 250));
+    };
+    attempt(tries);
+  });
+}
+
+async function launch() {
+  const opts = { args: ['--no-sandbox', '--disable-dev-shm-usage'] };
+  if (process.env.PW_EXECUTABLE) opts.executablePath = process.env.PW_EXECUTABLE;
+  try { return await chromium.launch(opts); }
+  catch (e) { return await chromium.launch({ ...opts, executablePath: '/opt/pw-browsers/chromium-1194/chrome-linux/chrome' }); }
+}
+
+async function openApp(browser, { charts }) {
+  const ctx = await browser.newContext({ viewport: { width: 1300, height: 1000 } });
+  const page = await ctx.newPage();
+  await page.route('**/*', route => {
+    const url = route.request().url();
+    if (url.startsWith(BASE) || url.startsWith('data:') || url.startsWith('blob:')) return route.continue();
+    return route.abort();
+  });
+  if (charts) {
+    // Stands in for the CDN's Chart.js and records every config the app builds.
+    await page.addInitScript(() => {
+      window.__charts = [];
+      window.Chart = function (el, cfg) { window.__charts.push(cfg); this.destroy = function () {}; };
+    });
+  }
+  const errs = [];
+  page.on('pageerror', e => { if (!/firebase|db is not defined/.test(e.message)) errs.push(e.message); });
+  page.on('dialog', d => d.accept());
+  await page.goto(BASE, { waitUntil: 'domcontentloaded', timeout: 60000 });
+  await page.waitForSelector('.sidebar');
+  return { ctx, page, errs };
+}
+
+/* Worse-first, so a check can say "this did not improve the verdict". */
+const ORDER = ['overdue', 'behind', 'risk', 'ontrack', 'ahead', 'nodate', 'notstarted', 'noplan', 'done'];
+const HEALTH_RANK = h => ORDER.indexOf(h);
+
+const go = (page, v) => page.evaluate(x => handleAction('nav', { getAttribute: () => x }), v)
+  .then(() => page.waitForTimeout(350));
+
+(async () => {
+  const server = spawn('node', ['serve.js'], { cwd: ROOT, stdio: 'ignore' });
+  const stop = () => { try { server.kill(); } catch (e) {} };
+  process.on('exit', stop);
+  await waitForServer();
+  const browser = await launch();
+  const { page, errs } = await openApp(browser, { charts: true });
+
+  await go(page, 'settings');
+  await page.fill('#import-input', FIXTURE);
+  await page.click('[data-action="import-preview"]');
+  await page.click('[data-action="import-apply"]');
+  await page.waitForTimeout(700);
+
+  const titleOf = id => page.evaluate(x => (byId(x) || {}).title, id);
+  const statOf = id => page.evaluate(x => { const s = projectStats(byId(x)); return { pct: s.pct, health: s.health, container: s.container, total: s.total, risks: s.openRisks, cpi: s.cpi, earned: s.earned, budget: s.budget }; }, id);
+
+  console.log('\nNOTHING CHANGES FOR A PROJECT THAT USES NONE OF IT');
+  const plain = await page.evaluate(() => projects().find(p => p.subtasks.length > 1).id);
+  const before = await statOf(plain);
+  ok('an ordinary project still reports a percentage', before.pct !== null, before);
+  ok('  and is not a container', before.container === false, before);
+  ok('  with no money figures invented', before.budget === null && before.cpi === null, before);
+
+  console.log('\nLEVELS — A PORTFOLIO IS WHAT SITS UNDER IT');
+  await go(page, 'projects');
+  await page.click('[data-action="new-project"][data-kind="portfolio"]');
+  await page.waitForSelector('#np-title');
+  await page.fill('#np-title', 'Intel Group');
+  await page.click('[data-action="confirm-new-project"]');
+  await page.waitForTimeout(500);
+  const portId = await page.evaluate(() => (projects().find(p => p.title === 'Intel Group') || {}).id);
+  ok('a portfolio can be created', !!portId);
+  ok('  and it is a container with nothing under it', (await statOf(portId)).total === 0, await statOf(portId));
+
+  // Put a real project under it through the editor, the way the owner would.
+  await page.evaluate(x => handleAction('open-editor', { getAttribute: () => x }), plain);
+  await page.waitForSelector('#ed-kind');
+  ok('the editor offers a level', await page.locator('#ed-kind option').count() === 3);
+  await page.selectOption('#ed-parent', portId);
+  await page.fill('#ed-weight', '3');
+  await page.fill('#ed-budget', '500000');
+  await page.fill('#ed-spent', '400000');
+  await page.click('[data-action="confirm-edit"]');
+  await page.waitForTimeout(500);
+
+  const port = await statOf(portId);
+  ok('the portfolio now holds it', port.total === 1, port);
+  ok('  and reports the child\'s completion as its own', port.pct === before.pct, { port: port.pct, child: before.pct });
+  ok('  with the child\'s budget rolled up', port.budget === 500000, port);
+  const child = await statOf(plain);
+  ok('the child kept its own numbers', child.pct === before.pct, child);
+  ok('  and gained earned value from the budget', child.earned !== null && child.cpi !== null, child);
+
+  console.log('\nTHE TREE');
+  await go(page, 'reports');
+  await page.click('[data-tab="portfolio"]');
+  await page.waitForTimeout(500);
+  const tree = await page.locator('.tree-row').count();
+  ok('the tree shows the portfolio and its child', tree >= 2, tree);
+  const treeText = await page.locator('.card').filter({ has: page.locator('.tree-row') }).innerText();
+  ok('  naming the share of the parent', /% of parent/.test(treeText), treeText.split('\n').slice(0, 6));
+  ok('  and the money against it', /500,000/.test(treeText));
+
+  console.log('\nRISK — A LIVE ONE CHANGES THE VERDICT');
+  /* The fixture project is long overdue, and overdue is already the worst
+     verdict there is. Give it a sane window first, so what is being tested is
+     the risk's effect and not the calendar's. */
+  await page.evaluate(x => {
+    const p = byId(x), DAY = 86400000;
+    const iso = t => new Date(t).toISOString().slice(0, 10);
+    p.startDate = iso(Date.now() - 50 * DAY);
+    p.dueDate = iso(Date.now() + 50 * DAY);
+    p.subtasks.slice(0, 5).forEach(s => { s.done = true; s.doneAt = new Date().toISOString(); });
+    // Bring the spend back in line too, so the only thing left to move the
+    // verdict is the risk about to be added.
+    p.actualCost = 300000;
+    persist();
+  }, plain);
+  await page.waitForTimeout(400);
+  const healthBefore = (await statOf(plain)).health;
+  ok('with a sane window it is not in trouble', healthBefore !== 'overdue' && healthBefore !== 'behind', healthBefore);
+  await page.evaluate(x => handleAction('open-project-report', { getAttribute: () => x }), plain);
+  await page.waitForTimeout(400);
+  await page.click('[data-action="add-risk"]');
+  await page.waitForSelector('#rk-title');
+  await page.fill('#rk-title', 'Crane slot may slip');
+  await page.selectOption('#rk-prob', '4');
+  await page.selectOption('#rk-impact', '5');
+  await page.fill('#rk-owner', 'Site team');
+  await page.click('[data-action="save-risk"]');
+  await page.waitForTimeout(500);
+  const withRisk = await statOf(plain);
+  ok('the risk is logged', withRisk.risks === 1, withRisk);
+  ok('  and a score of 20 drags the verdict to off track', withRisk.health === 'behind', { was: healthBefore, now: withRisk.health });
+  ok('  which is a downgrade, never an upgrade',
+    HEALTH_RANK(withRisk.health) <= HEALTH_RANK(healthBefore), { was: healthBefore, now: withRisk.health });
+  const modal = await page.locator('.modal').innerText();
+  ok('  the project panel lists it', /Crane slot may slip/.test(modal));
+  ok('  with a heat map behind it', await page.locator('.modal .heat-cell').count() === 25, await page.locator('.modal .heat-cell').count());
+  ok('  and the portfolio above it turns too', (await statOf(portId)).health === 'behind', await statOf(portId));
+
+  // Closing it takes the pressure off again.
+  await page.click('.modal [data-action="edit-risk"]');
+  await page.waitForSelector('#rk-status');
+  await page.selectOption('#rk-status', 'closed');
+  await page.click('[data-action="save-risk"]');
+  await page.waitForTimeout(500);
+  ok('closing the risk gives the verdict back', (await statOf(plain)).health === healthBefore, await statOf(plain));
+  await page.click('.modal [data-action="delete-risk"]');
+  await page.waitForTimeout(500);
+  ok('  and it can be deleted', (await page.evaluate(x => byId(x).risks.length, plain)) === 0);
+
+  console.log('\nDETAILS AND WHAT HAPPENED');
+  await page.click('.modal [data-action="add-field"]');
+  await page.waitForSelector('#fd-label');
+  await page.fill('#fd-label', 'Vendor');
+  await page.fill('#fd-value', 'Shanghai Lift Co.');
+  await page.click('[data-action="save-field"]');
+  await page.waitForTimeout(500);
+  ok('a custom detail is kept', await page.evaluate(x => byId(x).fields.length, plain) === 1);
+  ok('  and shown', /Shanghai Lift Co\./.test(await page.locator('.modal').innerText()));
+  await page.fill('.modal input[data-role="proj-log"]', 'Crane booked for the 20th');
+  await page.click('.modal [data-action="add-log"]');
+  await page.waitForTimeout(500);
+  const log = await page.evaluate(x => byId(x).log.map(l => l.text), plain);
+  ok('a note goes into the log', log.includes('Crane booked for the 20th'), log);
+  ok('  dated', await page.evaluate(x => !!byId(x).log[0].at, plain));
+
+  console.log('\nPART-DONE MILESTONES');
+  await page.click('.modal-actions [data-action="close-modal"]');
+  await page.waitForTimeout(300);
+  await go(page, 'projects');
+  await page.locator('.project-card').filter({ hasText: await titleOf(plain) }).locator('.project-head').click();
+  await page.waitForTimeout(400);
+  const pctBefore = (await statOf(plain)).pct;
+  // The first few are closed by now; part-done only means anything on an open one.
+  await page.locator('.sub-row [data-action="rename-subtask"]').last().click();
+  await page.waitForSelector('#ms-pct');
+  await page.fill('#ms-pct', '50');
+  await page.click('[data-action="confirm-rename-subtask"]');
+  await page.waitForTimeout(500);
+  const pctAfter = (await statOf(plain)).pct;
+  ok('half a milestone moves the project half a milestone', pctAfter > pctBefore, { pctBefore, pctAfter });
+  ok('  and says so on the row', /50%/.test(await page.locator('.project-body').first().innerText()));
+
+  console.log('\nDOUGHNUTS — WHAT THE CHART IS ACTUALLY ASKED TO DRAW');
+  await go(page, 'reports');
+  await page.click('[data-tab="areas"]');
+  await page.waitForTimeout(500);
+  const donut = await page.evaluate(() => (window.__charts || []).filter(c => c.type === 'doughnut').pop());
+  ok('a doughnut is drawn for where the open effort sits', !!donut, donut && donut.type);
+  ok('  with no more than six slices', donut.data.labels.length <= 6, donut.data.labels);
+  ok('  every slice a positive number', donut.data.datasets[0].data.every(v => v > 0), donut.data.datasets[0].data);
+  ok('  in the fixed series order, biggest first',
+    donut.data.datasets[0].backgroundColor[0].toLowerCase() === '#2a78d6', donut.data.datasets[0].backgroundColor);
+  ok('  sorted', donut.data.datasets[0].data.slice(1).every((v, i) => v <= donut.data.datasets[0].data[i]), donut.data.datasets[0].data);
+  // The legend is what carries the numbers when the colour cannot.
+  const legend = await page.locator('.legend li').allInnerTexts();
+  ok('  and a written legend repeats them', legend.length === donut.data.labels.length, legend);
+  ok('    with a share each', legend.every(l => /%/.test(l)), legend);
+
+  await page.click('[data-tab="projects"]');
+  await page.waitForTimeout(500);
+  const health = await page.evaluate(() => (window.__charts || []).filter(c => c.type === 'doughnut').pop());
+  ok('the health mix is a doughnut too', !!health);
+  ok('  coloured by verdict, not by series slot',
+    health.data.datasets[0].backgroundColor.every(c => ['#10B981', '#06B6D4', '#94A3B8', '#F59E0B', '#F43F5E', '#CBD5E1'].includes(c)),
+    health.data.datasets[0].backgroundColor);
+
+  console.log('\nCURRENCY IS A LABEL, NOT A CONVERSION');
+  await go(page, 'settings');
+  await page.fill('#currency-input', 'ETB');
+  await page.locator('#currency-input').blur();
+  await page.waitForTimeout(500);
+  ok('the label is kept', await page.evaluate(() => state.state.settings.currency) === 'ETB');
+  await go(page, 'reports');
+  await page.click('[data-tab="portfolio"]');
+  await page.waitForTimeout(500);
+  ok('  and shows beside the money', /ETB/.test(await page.locator('.view').innerText()));
+
+  console.log('\nTHE CHART STILL DEGRADES WITHOUT CHART.JS');
+  const plainPage = await openApp(browser, { charts: false });
+  await go(plainPage.page, 'reports');
+  await plainPage.page.click('[data-tab="areas"]');
+  await plainPage.page.waitForTimeout(400);
+  ok('no canvas is rendered when the library is missing', await plainPage.page.locator('.donut-canvas').count() === 0);
+  await plainPage.ctx.close();
+
+  console.log('\nTHEME IS PER DEVICE');
+  const other = await openApp(browser, { charts: false });
+  const themeOf = p => p.evaluate(() => document.documentElement.dataset.theme);
+  const first = await themeOf(page);
+  await go(page, 'settings');
+  await page.click('[data-action="toggle-theme"]');
+  await page.waitForTimeout(400);
+  ok('switching changes this device', (await themeOf(page)) !== first, { first, now: await themeOf(page) });
+  await other.page.reload({ waitUntil: 'domcontentloaded' });
+  await other.page.waitForSelector('.sidebar');
+  await other.page.waitForTimeout(400);
+  ok('  and leaves the other one alone', (await themeOf(other.page)) === first, { other: await themeOf(other.page), first });
+  ok('  without writing it into the synced data',
+    await page.evaluate(() => { const t = JSON.parse(localStorage.getItem('adhd-second-brain-v1')); return t.state.settings.themeMode; }) !== (await themeOf(page)),
+    { stored: await page.evaluate(() => JSON.parse(localStorage.getItem('adhd-second-brain-v1')).state.settings.themeMode), shown: await themeOf(page) });
+  await other.ctx.close();
+
+  const allErrs = errs.concat(plainPage.errs, other.errs);
+  console.log('\nconsole errors: ' + (allErrs.length ? JSON.stringify(allErrs) : 'none'));
+  allErrs.forEach(() => fails++);
+  console.log(fails ? `\nportfolio: ${fails} CHECK(S) FAILED` : '\nportfolio: all checks passed');
+
+  await browser.close();
+  stop();
+  process.exit(fails ? 1 : 0);
+})().catch(e => { console.error(e); process.exit(1); });

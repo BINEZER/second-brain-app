@@ -336,6 +336,35 @@
       .triage-actions .btn{justify-content:center;padding:12px}
       .triage-actions .full{grid-column:1/-1}
 
+      /* The portfolio tree: one row per item, indented by depth. */
+      .tree-row{padding-top:10px;padding-bottom:10px;border-top:1px solid var(--c-border)}
+      .tree-row:first-child{border-top:none}
+      .tree-main{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+      .tree-mark{color:var(--c-text-muted);font-size:12px;flex-shrink:0}
+      .tree-title{font-size:14px;font-weight:600;min-width:0;word-break:break-word}
+      .tree-meta{display:flex;gap:10px;flex-wrap:wrap;font-size:11.5px;color:var(--c-text-muted);margin-top:3px}
+      .tree-bar{height:5px;border-radius:99px;background:var(--c-surface-alt);margin-top:7px;overflow:hidden}
+      .tree-bar span{display:block;height:100%;border-radius:99px}
+
+      /* A doughnut and the numbers behind it, side by side on a desktop and
+         stacked on a phone — the legend is the readable half on a small screen. */
+      .donut-wrap{display:flex;gap:18px;align-items:center;flex-wrap:wrap}
+      .donut-canvas{flex:0 0 160px;height:160px;width:160px;position:relative}
+      .legend{list-style:none;margin:0;padding:0;flex:1 1 220px;min-width:0}
+      .legend li{display:flex;align-items:center;gap:9px;padding:5px 0;font-size:13px;border-top:1px solid var(--c-border)}
+      .legend li:first-child{border-top:none}
+      .legend i{width:10px;height:10px;border-radius:3px;flex-shrink:0}
+      .legend-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+      .legend b{font-family:'JetBrains Mono',monospace;font-size:12.5px;white-space:nowrap}
+      .legend-share{color:var(--c-text-muted);font-weight:500}
+
+      /* Risk heat map: probability down, impact across. */
+      .heat{border-collapse:separate;border-spacing:3px;font-size:11px}
+      .heat-cell{width:34px;height:30px;border-radius:6px;border:1px solid var(--c-border);text-align:center;
+        color:#fff;font-weight:700;font-size:12px;vertical-align:middle}
+      .heat-axis{font-size:9.5px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--c-text-muted);
+        text-align:right;padding-right:4px;white-space:nowrap}
+      .heat-foot{text-align:center;padding:2px 0 0}
       .visually-hidden{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
       /* =========================================================
          Phones and tablets
@@ -687,6 +716,34 @@ const HEALTH_META = {
 const HEALTH_ORDER = ['overdue','behind','risk','ontrack','ahead','nodate','notstarted','noplan','done'];
 
 /* =========================================================
+   Portfolio → programme → project
+
+   A project is still a project: one of these levels, with a plan of milestones.
+   A programme or a portfolio holds other items instead of its own milestones,
+   and everything — completion, effort, budget, health, risk — rolls up the tree
+   by each child's weight among its siblings. Nothing existing changes shape: an
+   item with no kind is a project, with no parent, weighing one.
+   ========================================================= */
+const PROJECT_KINDS = {
+  project:   { label:'Project',   mark:'▪', sub:'Has its own milestones and tasks' },
+  program:   { label:'Programme', mark:'▣', sub:'Holds projects that share an outcome' },
+  portfolio: { label:'Portfolio', mark:'▦', sub:'Holds programmes and projects' }
+};
+const TREE_DEPTH_CAP = 8;   // a parent chain longer than this is a loop, not a plan
+
+/* The log every project office keeps: risks, assumptions, issues, dependencies.
+   A risk is scored probability × impact on 1–5, so 1–25, and the live ones feed
+   the project's health — being on schedule means little beside a live 20. */
+const RAID_TYPES = {
+  risk:       { label:'Risk',       sub:'Might happen, and would hurt' },
+  issue:      { label:'Issue',      sub:'Already happening' },
+  assumption: { label:'Assumption', sub:'Taken as true, unverified' },
+  dependency: { label:'Dependency', sub:'Someone else has to move first' }
+};
+const RAID_STATES = { open:'Open', mitigating:'Being handled', closed:'Closed' };
+const RAID_SCALE = ['—','Very low','Low','Medium','High','Very high'];   // index 1–5
+
+/* =========================================================
    Small utilities
    ========================================================= */
 function uid(){
@@ -755,7 +812,7 @@ function defaultRoot(){
     version: 1,
     state: {
       items: [],
-      settings: { nowPins: [], inactiveProjects: [], themeMode: matchMedia('(prefers-color-scheme: dark)').matches ? 'dark':'light' },
+      settings: { nowPins: [], inactiveProjects: [], currency: '', themeMode: matchMedia('(prefers-color-scheme: dark)').matches ? 'dark':'light' },
       lifeAreas: [],
       habits: [],
       recurring: [],
@@ -786,6 +843,10 @@ function loadRoot(){
       if(!EFFORT[s.effort]) s.effort = DEFAULT_EFFORT;
       if(s.doneAt===undefined) s.doneAt = null;   // legacy done milestones have no date; treated as pre-history
       if(!s.done) s.doneAt = null;
+      // Part-done. A milestone is still a tick by default; a long one (a build
+      // phase, a licence application) can report how far through it is instead.
+      s.pct = (typeof s.pct==='number' && s.pct>0 && s.pct<100) ? Math.round(s.pct) : null;
+      if(s.done) s.pct = null;
     });
     if(it.isStarred==null) it.isStarred=false;
     if(it.xpAwarded==null) it.xpAwarded = (it.status==='done'); // don't retro-award xp for legacy completed items
@@ -795,6 +856,32 @@ function loadRoot(){
     if(!it.status) it.status='open';
     if(!EFFORT[it.effort]) it.effort = DEFAULT_EFFORT;
     if(it.startDate===undefined) it.startDate = null;   // schedule window start; falls back to createdAt
+    if(it.type==='project'){
+      // Everything below is optional depth: a project that never uses it is
+      // exactly the project it was before these existed.
+      if(!PROJECT_KINDS[it.kind]) it.kind = 'project';
+      if(it.parentId===undefined) it.parentId = null;
+      if(!(it.weight>0)) it.weight = 1;                   // relative share among its siblings
+      it.budget = (typeof it.budget==='number' && it.budget>=0) ? it.budget : null;
+      it.actualCost = (typeof it.actualCost==='number' && it.actualCost>=0) ? it.actualCost : null;
+      if(typeof it.ref!=='string') it.ref = '';
+      if(!HEALTH_META[it.healthOverride]) it.healthOverride = null;
+      if(!Array.isArray(it.fields)) it.fields = [];
+      it.fields.forEach(f=>{ if(!f.id) f.id=uid(); if(typeof f.label!=='string') f.label=''; if(typeof f.value!=='string') f.value=''; });
+      if(!Array.isArray(it.risks)) it.risks = [];
+      it.risks.forEach(r=>{
+        if(!r.id) r.id=uid();
+        if(!RAID_TYPES[r.type]) r.type='risk';
+        if(!RAID_STATES[r.status]) r.status='open';
+        r.probability = Math.min(5, Math.max(1, Math.round(r.probability)||3));
+        r.impact = Math.min(5, Math.max(1, Math.round(r.impact)||3));
+        if(typeof r.title!=='string') r.title='';
+        if(typeof r.owner!=='string') r.owner='';
+        if(typeof r.response!=='string') r.response='';
+      });
+      if(!Array.isArray(it.log)) it.log = [];
+      it.log.forEach(l=>{ if(!l.id) l.id=uid(); if(typeof l.text!=='string') l.text=''; if(!l.at) l.at=it.createdAt||new Date().toISOString(); });
+    }
   });
   st.settings = st.settings || {};
   if(!Array.isArray(st.settings.nowPins)) st.settings.nowPins=[];
@@ -805,6 +892,8 @@ function loadRoot(){
      usually survives a real day; it is advice, not a limit. */
   if(!st.settings.themeMode) st.settings.themeMode = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark':'light';
   if(typeof st.settings.numberLists!=='boolean') st.settings.numberLists = false;
+  // Shown beside money. Display only — the app never converts between currencies.
+  if(typeof st.settings.currency!=='string') st.settings.currency = '';
   if(!Array.isArray(st.lifeAreas)) st.lifeAreas = [];
   st.lifeAreas.forEach(a=>{
     if(!Array.isArray(a.framework)) a.framework=[];
@@ -891,6 +980,21 @@ function migrateAreasIfNeeded(){
    ========================================================= */
 const DEVICE_KEY = 'sb-device-v1';
 const BACKUP_KEY = STATE_KEY + '-backup';
+const THEME_KEY = 'sb-theme-v1';
+
+/* Appearance belongs to the screen you are looking at, not to the account:
+   dark on the phone at night and light on the laptop by day is one person with
+   two preferences, not a conflict to resolve. The synced value is used once, as
+   the seed for a device that has never chosen, so nobody's current theme flips
+   the first time they open this version. */
+function themeMode(){
+  let t=null; try{ t = localStorage.getItem(THEME_KEY); }catch(e){}
+  if(t==='dark' || t==='light') return t;
+  const inherited = state && state.state && state.state.settings && state.state.settings.themeMode;
+  if(inherited==='dark' || inherited==='light') return inherited;
+  return matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+}
+function setThemeMode(mode){ try{ localStorage.setItem(THEME_KEY, mode); }catch(e){} }
 
 function deviceName(){
   const ua = (typeof navigator!=='undefined' && navigator.userAgent) || '';
@@ -1475,23 +1579,131 @@ function projectUnits(p){
   const units = [];
   (p.subtasks||[]).forEach(s=>units.push({
     kind:'milestone', id:s.id, title:s.title, done:!!s.done,
+    // How much of this unit counts as closed: a tick, or the part-done figure.
+    share: s.done ? 1 : (s.pct ? Math.min(1, s.pct/100) : 0),
     weight:effortWeight(s), effort:(EFFORT[s.effort]?s.effort:DEFAULT_EFFORT),
-    doneAt:s.doneAt||null, dueDate:null
+    doneAt:s.doneAt||null, dueDate:null, pct:s.pct||null
   }));
   tasksOf(p.id).forEach(c=>units.push({
     kind:'task', id:c.id, title:c.title, done:c.status==='done',
+    share: c.status==='done' ? 1 : 0,
     weight:effortWeight(c), effort:(EFFORT[c.effort]?c.effort:DEFAULT_EFFORT),
-    doneAt:c.completedAt||null, dueDate:c.dueDate||null
+    doneAt:c.completedAt||null, dueDate:c.dueDate||null, pct:null
   }));
   return units;
 }
 
-function projectStats(p){
+/* =========================================================
+   Levels, money and risk
+
+   projectStats stays the one source of truth for every percentage, and now
+   answers for three shapes: a project (its own milestones), and a programme or
+   portfolio (its children, by weight). Callers never need to know which.
+   ========================================================= */
+function isContainerKind(p){ return p && (p.kind==='program' || p.kind==='portfolio'); }
+function childProjects(p){ return projects().filter(c=>c.parentId===p.id); }
+function parentOf(p){ return p && p.parentId ? byId(p.parentId) : null; }
+/* The chain from the top down to this item, for a breadcrumb. Depth-capped: a
+   parent loop would otherwise hang the render rather than show a bad tree. */
+function ancestry(p){
+  const out = []; let cur = parentOf(p), n = 0;
+  while(cur && n++ < TREE_DEPTH_CAP){ out.unshift(cur); cur = parentOf(cur); }
+  return out;
+}
+function liveRisks(p){ return (p.risks||[]).filter(r=>r.status!=='closed' && (r.type==='risk'||r.type==='issue')); }
+function riskScore(r){ return (r.probability||0) * (r.impact||0); }
+function topRisk(p){ return liveRisks(p).reduce((a,r)=>Math.max(a, riskScore(r)), 0); }
+const money = n => (n==null ? '—' : Math.round(n).toLocaleString());
+/* Effort points are whole numbers until a milestone reports itself part done,
+   which can put a fraction on the board. One decimal, and only when there is one. */
+const pts = n => (n==null ? '—' : String(Math.round(n*10)/10));
+function currency(){ return (state.state.settings.currency||'').trim(); }
+function withCurrency(n){ const c = currency(); return money(n) + (c && n!=null ? ' '+c : ''); }
+
+/* Cost and risk can only make the verdict worse, never better: a project dead on
+   schedule while burning twice its budget is not "on track". */
+function tempered(health, m){
+  if(health==='done' || health==='noplan' || health==='notstarted') return health;
+  const bad  = (m.cpi!=null && m.cpi<0.8) || m.riskScore>=15;
+  const warn = (m.cpi!=null && m.cpi<0.95) || m.riskScore>=10;
+  if(bad  && HEALTH_ORDER.indexOf('behind') < HEALTH_ORDER.indexOf(health)) return 'behind';
+  if(warn && HEALTH_ORDER.indexOf('risk')   < HEALTH_ORDER.indexOf(health)) return 'risk';
+  return health;
+}
+
+function projectStats(p, depth){
+  depth = depth||0;
+  if(isContainerKind(p) && depth < TREE_DEPTH_CAP) return containerStats(p, depth);
+  return leafStats(p);
+}
+
+/* A programme or portfolio has no milestones of its own: it is what its children
+   add up to, each weighted by its share among its siblings. */
+function containerStats(p, depth){
+  const kids = childProjects(p);
+  const kid = kids.map(c=>({ c, st: projectStats(c, depth+1) }));
+  const w = c => Math.max(0.0001, c.weight||1);
+  const measurable = kid.filter(x=>x.st.pct!=null);
+  const wTotal = measurable.reduce((a,x)=>a+w(x.c), 0);
+  const isDone = p.status==='done';
+  const pct = wTotal ? Math.round(measurable.reduce((a,x)=>a+w(x.c)*x.st.pct, 0)/wTotal) : (isDone?100:null);
+  const timeParts = kid.filter(x=>x.st.timePct!=null);
+  const timeW = timeParts.reduce((a,x)=>a+w(x.c), 0);
+
+  const nowMs = Date.now();
+  const startMs = projectStartMs(p);
+  const dueMs = p.dueDate ? endOfDayMs(p.dueDate) : null;
+  const ownTimePct = dueMs ? clampPct((nowMs-startMs)/Math.max(1,(dueMs-startMs))*100) : null;
+  const timePct = ownTimePct!=null ? ownTimePct
+                : (timeW ? Math.round(timeParts.reduce((a,x)=>a+w(x.c)*x.st.timePct, 0)/timeW) : null);
+
+  const weightTotal = kid.reduce((a,x)=>a+x.st.weightTotal, 0);
+  const weightDone  = kid.reduce((a,x)=>a+x.st.weightDone, 0);
+  const budget = kid.reduce((a,x)=>a+(x.st.budget||0), 0) + (p.budget||0);
+  const spent  = kid.reduce((a,x)=>a+(x.st.spent||0), 0)  + (p.actualCost||0);
+  const earned = kid.reduce((a,x)=>a+(x.st.earned||0), 0) + (p.budget? p.budget*((pct||0)/100) : 0);
+  const riskScoreTop = Math.max(topRisk(p), ...kid.map(x=>x.st.riskScore), 0);
+  const openRisks = liveRisks(p).length + kid.reduce((a,x)=>a+x.st.openRisks, 0);
+
+  const variance = (pct!=null && timePct!=null) ? Math.round(pct-timePct) : null;
+  const overdue = !!(dueMs && !isDone && nowMs > dueMs);
+  // The worst child is the honest headline: one red project makes the programme red.
+  const kidHealth = kid.filter(x=>x.c.status!=='done').map(x=>x.st.health)
+    .filter(h=>h!=='noplan' && h!=='notstarted');
+  let health = isDone ? 'done'
+    : !kids.length ? 'noplan'
+    : overdue ? 'overdue'
+    : kidHealth.length ? kidHealth.slice().sort((a,b)=>HEALTH_ORDER.indexOf(a)-HEALTH_ORDER.indexOf(b))[0]
+    : 'nodate';
+  const cpi = spent>0 && budget>0 ? earned/spent : null;
+  health = tempered(health, { cpi, riskScore:riskScoreTop });
+  if(p.healthOverride && p.status!=='done') health = p.healthOverride;
+
+  const lastStamps = kid.map(x=>x.st.lastActivityMs).filter(n=>n!=null);
+  const lastActivityMs = lastStamps.length ? Math.max.apply(null, lastStamps) : null;
+
+  return {
+    units: [], hasPlan: kids.length>0, done: kid.filter(x=>x.c.status==='done').length, total: kids.length,
+    weightDone, weightTotal, pct, countPct: pct, timePct, variance, overdue, health,
+    daysTotal: dueMs ? Math.max(1, dayDiff(startMs, dueMs)) : null,
+    daysLeft: dueMs ? dayDiff(nowMs, dueMs) : null,
+    daysElapsed: dayDiff(startMs, nowMs),
+    lastActivityMs, daysSinceActivity: dayDiff(lastActivityMs!=null?lastActivityMs:startMs, nowMs),
+    stalled: false, startMs, startedFromDate: explicitStartMs(p)!=null, notStarted: startMs>nowMs,
+    container: true, children: kid,
+    budget: budget||null, spent: spent||null, earned: budget?earned:null,
+    spi: (pct!=null && timePct>0) ? pct/timePct : null, cpi,
+    forecast: (cpi && budget) ? budget/cpi : null,
+    riskScore: riskScoreTop, openRisks
+  };
+}
+
+function leafStats(p){
   const units = projectUnits(p);
   const total = units.length;
   const done = units.filter(u=>u.done).length;
   const weightTotal = units.reduce((a,u)=>a+u.weight, 0);
-  const weightDone  = units.reduce((a,u)=>a+(u.done?u.weight:0), 0);
+  const weightDone  = units.reduce((a,u)=>a+u.weight*u.share, 0);
   const hasPlan = total > 0;
   const isDone = p.status==='done';
 
@@ -1536,11 +1748,28 @@ function projectStats(p){
   else if(variance>=HEALTH_RISK_MIN) health='risk';
   else health='behind';
 
+  /* Earned value: what the plan says this much completion is worth, against what
+     has actually been spent. Budget is optional — without it these are all null
+     and the project reports exactly what it did before. */
+  const budget = p.budget!=null ? p.budget : null;
+  const spent  = p.actualCost!=null ? p.actualCost : null;
+  const earned = (budget!=null && pct!=null) ? budget*(pct/100) : null;
+  const cpi = (earned!=null && spent>0) ? earned/spent : null;
+  const spi = (pct!=null && timePct>0) ? pct/timePct : null;
+  const riskScoreTop = topRisk(p);
+  health = tempered(health, { cpi, riskScore: riskScoreTop });
+  // The owner's own read beats the arithmetic: they know what the numbers cannot.
+  if(p.healthOverride && !isDone) health = p.healthOverride;
+
   return {
     units, hasPlan, done, total, weightDone, weightTotal,
     pct, countPct, timePct, variance, overdue, health,
     daysTotal, daysLeft, daysElapsed, lastActivityMs, daysSinceActivity, stalled,
-    startMs, startedFromDate, notStarted
+    startMs, startedFromDate, notStarted,
+    container:false, children:[],
+    budget, spent, earned, spi, cpi,
+    forecast: (cpi && budget) ? budget/cpi : null,
+    riskScore: riskScoreTop, openRisks: liveRisks(p).length
   };
 }
 
@@ -1614,11 +1843,11 @@ function portfolioStats(list){
 const ROLLUP_DRILLS = {
   weighted: {
     label: 'Weighted complete',
-    blurb: port => `${port.weightDone} of ${port.weightTotal} effort points closed across ${port.plannedCount} measurable project${port.plannedCount===1?'':'s'}. Big projects move this number more than small ones.`,
+    blurb: port => `${pts(port.weightDone)} of ${pts(port.weightTotal)} effort points closed across ${port.plannedCount} measurable project${port.plannedCount===1?'':'s'}. Big projects move this number more than small ones.`,
     empty: 'No project has been broken into steps yet, so there is no weighted percentage to explain.',
     pick: rows => rows.filter(r=>r.st.hasPlan),
     sort: (a,b) => (b.st.weightTotal-b.st.weightDone)-(a.st.weightTotal-a.st.weightDone),
-    note: st => `${st.weightDone}/${st.weightTotal} points · ${st.weightTotal-st.weightDone} left`
+    note: st => `${pts(st.weightDone)}/${pts(st.weightTotal)} points · ${pts(st.weightTotal-st.weightDone)} left`
   },
   average: {
     label: 'Average project',
@@ -1662,7 +1891,7 @@ const ROLLUP_DRILLS = {
     empty: 'No active projects.',
     pick: rows => rows,
     sort: (a,b) => HEALTH_ORDER.indexOf(a.st.health)-HEALTH_ORDER.indexOf(b.st.health) || (b.st.weightTotal-a.st.weightTotal),
-    note: st => st.hasPlan ? `${st.pct}% · ${st.done}/${st.total} steps · ${st.weightDone}/${st.weightTotal} points` : 'No milestones or tasks yet'
+    note: st => st.hasPlan ? `${st.pct}% · ${st.done}/${st.total} steps · ${pts(st.weightDone)}/${pts(st.weightTotal)} points` : 'No milestones or tasks yet'
   }
 };
 
@@ -1968,11 +2197,13 @@ function fmtHabitStreak(habit){
    Rendering
    ========================================================= */
 function render(){
-  document.documentElement.dataset.theme = state.state.settings.themeMode;
-  document.querySelector('meta[name="theme-color"]').setAttribute('content', state.state.settings.themeMode==='dark' ? '#0F172A':'#F8FAFC');
+  const theme = themeMode();
+  document.documentElement.dataset.theme = theme;
+  document.querySelector('meta[name="theme-color"]').setAttribute('content', theme==='dark' ? '#0F172A':'#F8FAFC');
   const app = qs('#app');
   const focusId = document.activeElement && document.activeElement.id;
   const caret = focusId && typeof document.activeElement.selectionStart==='number' ? document.activeElement.selectionStart : null;
+  donutJobs = [];
   app.innerHTML = renderSidebar() + renderMain();
   wireGlobal();
   renderCharts();
@@ -2477,6 +2708,8 @@ function renderProjectsView(){
     <div class="view-head">
       <div><div class="view-title">Projects</div><div class="view-sub">Grouped by Life Binder domain — everything with more than one step lives here.</div></div>
       <button class="btn btn-primary" data-action="new-project">+ New project</button>
+      <button class="btn" data-action="new-project" data-kind="program" title="A programme holds projects that share an outcome">+ Programme</button>
+      <button class="btn" data-action="new-project" data-kind="portfolio" title="A portfolio holds programmes and projects">+ Portfolio</button>
     </div>
     <div class="chip-row">
       <button class="chip ${ui.projectFilter==='all'?'on':''}" data-action="filter-project" data-cat="all">All domains</button>
@@ -2521,14 +2754,19 @@ function renderProjectCard(p, i){
       ${numLabel(i)}
       <button class="check ${p.status==='done'?'done':''}" data-action="complete" data-id="${p.id}">${checkSvg()}</button>
       <div class="item-main">
-        <div class="project-title">${esc(p.title)} ${p.isStarred?'⭐':''}</div>
+        <div class="project-title">${(p.kind&&p.kind!=='project')?PROJECT_KINDS[p.kind].mark+' ':''}${esc(p.title)} ${p.isStarred?'⭐':''}</div>
         <div class="item-meta">
           <span class="chip" style="${catStyle(p.category)}">${esc(p.category)}</span>
           <span class="dot pri-dot pri-${p.priority}"></span><span class="pri-${p.priority}">${p.priority}</span>
           ${p.dueDate?`<span>${fmtDue(p.dueDate)}</span>`:''}
           ${healthChip(st)}
           ${stalledChip(st)}
-          <span>${st.hasPlan? `${pctLabel(st)} · ${st.done}/${st.total} steps · ${st.weightDone}/${st.weightTotal} effort` : 'No milestones or tasks yet'}</span>
+          ${st.openRisks?`<span class="health-chip health-behind" title="Open risks and issues">⚠ ${st.openRisks}</span>`:''}
+          <span>${st.container
+            ? (st.total? `${pctLabel(st)} · ${st.total} under it · ${pts(st.weightDone)}/${pts(st.weightTotal)} effort` : 'Nothing under it yet')
+            : (st.hasPlan? `${pctLabel(st)} · ${st.done}/${st.total} steps · ${pts(st.weightDone)}/${pts(st.weightTotal)} effort` : 'No milestones or tasks yet')}</span>
+          ${st.budget!=null?`<span title="Spent against budget">${money(st.spent||0)} / ${withCurrency(st.budget)}</span>`:''}
+          ${parentOf(p)?`<span title="Sits under">↳ ${esc(parentOf(p).title)}</span>`:''}
           ${archived?'<span>· archived</span>':''}
         </div>
         ${progressBar(st)}
@@ -2547,6 +2785,25 @@ function renderProjectCard(p, i){
 }
 
 function renderProjectBody(p, children){
+  // A programme or portfolio has no plan of its own — what is under it is the plan.
+  if(isContainerKind(p)){
+    const st = projectStats(p);
+    const total = st.children.reduce((a,x)=>a+Math.max(0.0001,x.c.weight||1), 0);
+    return `<div class="project-body">
+      <div class="section-label">What is under it</div>
+      ${st.children.length ? st.children.map(x=>`
+        <div class="sub-row">
+          <span class="sub-title">${PROJECT_KINDS[x.c.kind||'project'].mark} <span class="clickable-title" data-action="open-project-report" data-id="${x.c.id}">${esc(x.c.title)}</span></span>
+          <div class="item-actions">
+            <span class="view-sub" style="margin:0">${Math.round(Math.max(0.0001,x.c.weight||1)/total*100)}% share · ${x.st.pct==null?'no plan':x.st.pct+'%'}</span>
+            <span class="health-chip ${HEALTH_META[x.st.health].cls}">${HEALTH_META[x.st.health].label}</span>
+            <button class="icon-btn btn-sm" data-action="open-editor" data-id="${x.c.id}" title="Edit">✎</button>
+          </div>
+        </div>`).join('')
+        : `<div class="view-sub">Nothing under it yet. Edit any project and set <b>${esc(p.title)}</b> as what it sits under.</div>`}
+      <div class="view-sub" style="margin-top:10px">Completion, effort and budget here are whatever the items above add up to, each by its share.</div>
+    </div>`;
+  }
   return `<div class="project-body">
     <div class="section-label">Milestones <span style="text-transform:none;letter-spacing:0;font-weight:500">— tap S/M/L/XL to size a step</span></div>
     <div class="sub-list">
@@ -2555,7 +2812,7 @@ function renderProjectBody(p, children){
           ${numLabel(si)}
           <button class="check ${s.done?'done':''}" style="width:17px;height:17px" data-action="toggle-subtask" data-id="${p.id}" data-sub="${s.id}">${checkSvg()}</button>
           ${effortChip(s.effort, `data-id="${p.id}" data-sub="${s.id}"`)}
-          <span class="sub-title" style="${s.done?'text-decoration:line-through;color:var(--c-text-muted)':''}">${esc(s.title)}</span>
+          <span class="sub-title" style="${s.done?'text-decoration:line-through;color:var(--c-text-muted)':''}">${esc(s.title)}${(!s.done && s.pct)?` <span style="color:var(--c-info);font-weight:600;font-size:12px">${s.pct}%</span>`:''}</span>
           <div class="item-actions">
             ${moveTools('move-subtask', p.id, si, p.subtasks.length, `data-id="${p.id}"`, p.id)}
             ${pinButton(msRef(p.id, s.id))}
@@ -2793,6 +3050,88 @@ function destroyCharts(){
   Object.values(charts).forEach(c=>{ try{ c.destroy(); }catch(e){} });
   charts = {};
 }
+/* =========================================================
+   Chart colour and part-to-whole
+
+   Series colours are a fixed order, not a hash: slot 1 is always the same hue,
+   so a filter that drops a series never repaints the survivors. The two columns
+   are the same eight hues stepped for each surface, and both were checked for
+   colour-blind separation rather than eyeballed — worst adjacent pair ΔE 9.1
+   light, 8.4 dark, against a floor of 8.
+
+   Light mode's lighter hues fall under 3:1 against the page, which is why every
+   doughnut here carries a written legend with its numbers: the colour is never
+   the only thing saying which slice is which.
+   ========================================================= */
+const SERIES_LIGHT = ['#2a78d6','#eb6834','#1baf7a','#eda100','#e87ba4','#008300','#6250d6','#e34948'];
+const SERIES_DARK  = ['#3987e5','#d95926','#199e70','#c98500','#d55181','#008300','#9085e9','#e66767'];
+const SERIES_REST  = '#94A3B8';
+const DONUT_CAP = 6;   // past six slices the eye gives up; the tail folds into one
+function seriesColors(){ return themeMode()==='dark' ? SERIES_DARK : SERIES_LIGHT; }
+
+/* Charts are built after the view's HTML exists, so the views queue what they
+   want drawn and renderCharts drains the queue. */
+let donutJobs = [];
+
+/* Biggest first, with everything past the cap folded into one honest slice. */
+function donutSlices(pairs, cap){
+  const kept = pairs.filter(x=>x.value>0).sort((a,b)=>b.value-a.value);
+  const max = cap || DONUT_CAP;
+  if(kept.length <= max) return kept;
+  const head = kept.slice(0, max-1);
+  const tail = kept.slice(max-1);
+  head.push({ label:`Everything else (${tail.length})`, value: tail.reduce((a,x)=>a+x.value,0), rest:true });
+  return head;
+}
+
+/* A doughnut plus the numbers it is made of. The legend is not decoration: it is
+   what makes the slices readable without relying on colour, and on a phone it is
+   usually the part that actually gets read. */
+function donutCard(id, pairs, opts){
+  opts = opts || {};
+  const slices = donutSlices(pairs, opts.cap);
+  const total = slices.reduce((a,x)=>a+x.value, 0);
+  if(!total) return opts.empty ? `<div class="view-sub" style="margin-bottom:16px">${opts.empty}</div>` : '';
+  const cols = seriesColors();
+  // A slice may carry its own colour (health verdicts have fixed ones). Anything
+  // else takes the next series slot — by its place in the sorted list, so the
+  // biggest slice is always slot 1 rather than whatever the data order happened to be.
+  const colorOf = (x,i) => x.rest ? SERIES_REST : (x.color || cols[i % cols.length]);
+  if(chartsAvailable()) donutJobs.push({ id, slices, colors: slices.map(colorOf), fmt: opts.fmt||null });
+  return `
+    <div class="card donut-card" style="margin-bottom:18px">
+      ${opts.title? `<div style="font-weight:600;font-size:14.5px;margin-bottom:2px">${opts.title}</div>`:''}
+      ${opts.sub? `<div class="view-sub" style="margin-bottom:12px">${opts.sub}</div>`:''}
+      <div class="donut-wrap">
+        ${chartsAvailable()? `<div class="donut-canvas"><canvas id="${id}"></canvas></div>`:''}
+        <ul class="legend">
+          ${slices.map((x,i)=>`<li>
+            <i style="background:${colorOf(x,i)}"></i>
+            <span class="legend-name">${esc(x.label)}</span>
+            <b>${opts.fmt? opts.fmt(x.value) : x.value}<span class="legend-share"> · ${Math.round(x.value/total*100)}%</span></b>
+          </li>`).join('')}
+        </ul>
+      </div>
+    </div>`;
+}
+
+function drawDonuts(){
+  donutJobs.forEach(job=>{
+    const el = document.getElementById(job.id);
+    if(!el) return;
+    charts[job.id] = new Chart(el, {
+      type:'doughnut',
+      data:{ labels: job.slices.map(x=>x.label),
+             datasets:[{ data: job.slices.map(x=>x.value), backgroundColor: job.colors,
+                         borderColor: getComputedStyle(document.documentElement).getPropertyValue('--c-surface').trim()||'#fff',
+                         borderWidth: 2 }] },
+      options:{ responsive:true, maintainAspectRatio:false, cutout:'62%',
+        plugins:{ legend:{ display:false },
+          tooltip:{ callbacks:{ label:(c)=>` ${c.label}: ${job.fmt? job.fmt(c.raw) : c.raw}` } } } }
+    });
+  });
+}
+
 function chartTextColor(){ return (getComputedStyle(document.documentElement).getPropertyValue('--c-text-secondary')||'').trim() || '#475569'; }
 function chartGridColor(){ return (getComputedStyle(document.documentElement).getPropertyValue('--c-border')||'').trim() || '#E2E8F0'; }
 function barChartOptions(horizontal){
@@ -2824,6 +3163,7 @@ function chartCard(id, height, extraStyle){
 function renderCharts(){
   destroyCharts();
   if(typeof Chart==='undefined') return;
+  drawDonuts();
 
   const areasCanvas = document.getElementById('chart-areas');
   if(areasCanvas){
@@ -2994,23 +3334,42 @@ function renderReportsView(){
   return `<div class="view">
     <div class="view-head">
       <div><div class="view-title">Reports</div><div class="view-sub">Progress by life area, project, and habit — plus a full completed-tasks timeline.</div></div>
-      <button class="btn" data-action="export-report">⇩ Export ${tab==='projects'?'portfolio':tab==='areas'?'life areas':tab==='habits'?'habits':tab==='compare'?'comparison':'completed work'}</button>
+      <button class="btn" data-action="export-report">⇩ Export ${tab==='projects'?'portfolio':tab==='portfolio'?'the tree':tab==='areas'?'life areas':tab==='habits'?'habits':tab==='compare'?'comparison':'completed work'}</button>
     </div>
     <div class="chip-row">
       <button class="chip ${tab==='areas'?'on':''}" data-action="reports-tab" data-tab="areas">Life Areas</button>
       <button class="chip ${tab==='projects'?'on':''}" data-action="reports-tab" data-tab="projects">Projects</button>
+      <button class="chip ${tab==='portfolio'?'on':''}" data-action="reports-tab" data-tab="portfolio">Portfolio</button>
       <button class="chip ${tab==='habits'?'on':''}" data-action="reports-tab" data-tab="habits">Habits</button>
       <button class="chip ${tab==='compare'?'on':''}" data-action="reports-tab" data-tab="compare">Compare</button>
       <button class="chip ${tab==='timeline'?'on':''}" data-action="reports-tab" data-tab="timeline">Timeline</button>
     </div>
-    ${tab==='projects'? renderReportsProjectsView() : tab==='habits'? renderReportsHabitsView() : tab==='compare'? renderReportsCompareView() : tab==='timeline'? renderReportsTimelineView() : renderReportsAreasView()}
+    ${tab==='projects'? renderReportsProjectsView() : tab==='portfolio'? renderReportsPortfolioView() : tab==='habits'? renderReportsHabitsView() : tab==='compare'? renderReportsCompareView() : tab==='timeline'? renderReportsTimelineView() : renderReportsAreasView()}
   </div>`;
+}
+
+/* Effort still open, by domain: the honest answer to "where is all my time going
+   to go", as opposed to where it has already gone. */
+function openEffortByArea(){
+  const by = {};
+  const add = (cat, n) => { if(n>0) by[cat||'Inbox'] = (by[cat||'Inbox']||0) + n; };
+  reportProjectList().filter(p=>p.status!=='done' && !isContainerKind(p)).forEach(p=>{
+    const st = projectStats(p);
+    add(p.category, st.weightTotal - st.weightDone);
+  });
+  openTasks().filter(t=>!t.projectId).forEach(t=>add(t.category, effortWeight(t)));
+  return Object.keys(by).map(k=>({ label:k, value: Math.round(by[k]) }));
 }
 
 function renderReportsAreasView(){
   const areas = state.state.lifeAreas;
   return `
     <div class="view-sub" style="margin-bottom:14px">${areas.length} life area${areas.length===1?'':'s'} tracked.</div>
+    ${donutCard('donut-areas', openEffortByArea(), {
+      title:'Where the work still waiting lives',
+      sub:'Effort points not yet closed, by domain — open milestones, open tasks, and standalone tasks.',
+      empty:'Nothing open anywhere — every effort point is closed.',
+      fmt: n=>n+' pts' })}
     ${areas.length? chartCard('chart-areas', Math.max(140,areas.length*32)) : ''}
     ${areas.length? areas.map(renderAreaProgress).join('') : `<div class="empty">No life areas yet — add one in the Life Binder tab.</div>`}
   `;
@@ -3056,9 +3415,15 @@ function renderReportsProjectsView(){
       ${tile('all', port.total, 'Projects', '')}
     </div>
     <div class="view-sub" style="margin-bottom:16px">
-      ${port.plannedCount} of ${port.total} project${port.total===1?'':'s'} measurable · ${port.weightDone} of ${port.weightTotal} effort points closed.
+      ${port.plannedCount} of ${port.total} project${port.total===1?'':'s'} measurable · ${pts(port.weightDone)} of ${pts(port.weightTotal)} effort points closed.
       ${port.noPlanCount? `<b>${port.noPlanCount}</b> project${port.noPlanCount===1?' has':'s have'} no milestones or tasks, so ${port.noPlanCount===1?'it is':'they are'} excluded from every percentage above.`:''}
     </div>
+
+    ${donutCard('donut-health', HEALTH_ORDER.map(h=>({ label: HEALTH_META[h].label, value: rows.filter(r=>r.st.health===h).length, color: HEALTH_BAR_COLOR[h]||'#94A3B8' })), {
+      title:'How the book of work is doing',
+      sub:'Every active project by its health verdict. Cost and risk can pull a verdict down; they never pull one up.',
+      empty:'No projects to report on yet.',
+      cap: 9 })}
 
     <div class="section-label">By domain</div>
     ${port.byArea.some(a=>a.pct!=null)? chartCard('chart-portfolio', Math.max(130, port.byArea.filter(a=>a.pct!=null).length*34)) : ''}
@@ -3071,7 +3436,7 @@ function renderReportsProjectsView(){
             <td><span class="chip" style="${catStyle(a.area)}">${esc(a.area)}</span></td>
             <td class="num">${a.count}</td>
             <td class="num"><b>${a.pct==null?'—':a.pct+'%'}</b></td>
-            <td class="num">${a.weightDone}/${a.weightTotal||0}</td>
+            <td class="num">${pts(a.weightDone)}/${pts(a.weightTotal||0)}</td>
             <td class="num" data-action="rollup-drill" data-key="offtrack" data-area="${esc(a.area)}" style="${a.offTrack?'color:var(--c-danger);font-weight:700':''}">${a.offTrack}</td>
             <td class="num" data-action="rollup-drill" data-key="noplan" data-area="${esc(a.area)}" style="${a.noPlan?'color:var(--c-warn);font-weight:700':''}">${a.noPlan}</td>
           </tr>`).join('')}
@@ -3104,12 +3469,16 @@ function renderProjectReportRow(p, st, i){
     <div class="project-head" data-action="open-project-report" data-id="${p.id}">
       ${numLabel(i)}
       <div class="item-main">
-        <div class="project-title">${esc(p.title)}</div>
+        <div class="project-title">${(p.kind&&p.kind!=='project')?PROJECT_KINDS[p.kind].mark+' ':''}${esc(p.title)}</div>
         <div class="item-meta">
           <span class="chip" style="${catStyle(p.category)}">${esc(p.category)}</span>
           ${healthChip(st)}
           ${stalledChip(st)}
-          <span>${st.hasPlan? `${st.pct}% · ${st.done}/${st.total} steps · ${st.weightDone}/${st.weightTotal} effort` : 'No milestones or tasks yet'}</span>
+          ${st.openRisks?`<span class="health-chip health-behind" title="Open risks and issues">⚠ ${st.openRisks}</span>`:''}
+          <span>${st.container
+            ? (st.total? `${st.pct==null?'—':st.pct+'%'} · ${st.total} under it · ${pts(st.weightDone)}/${pts(st.weightTotal)} effort` : 'Nothing under it yet')
+            : (st.hasPlan? `${st.pct}% · ${st.done}/${st.total} steps · ${pts(st.weightDone)}/${pts(st.weightTotal)} effort` : 'No milestones or tasks yet')}</span>
+          ${st.budget!=null?`<span title="Spent against budget">${money(st.spent||0)} / ${withCurrency(st.budget)}</span>`:''}
           ${p.dueDate? `<span>${fmtDue(p.dueDate)}</span>`:''}
           ${p.assignee? `<span class="chip">👤 ${esc(p.assignee)}</span>`:''}
         </div>
@@ -3174,6 +3543,85 @@ function compareDelta(a, b, suffix){
 function compareRow(label, a, b, suffix){
   const cell = v => v===null ? '—' : v + (suffix||'');
   return `<tr><td>${label}</td><td class="num">${cell(a)}</td><td class="num">${cell(b)}</td>${compareDelta(a,b,suffix)}</tr>`;
+}
+
+/* =========================================================
+   Reports > Portfolio — the whole tree, rolled up
+
+   Projects grouped by life area answer "which part of my life is this?".
+   This answers the other question: what is this programme actually worth,
+   how far through is it, and what is it costing.
+   ========================================================= */
+function portfolioRoots(){
+  const all = projects().filter(p=>inactiveProjects.indexOf(p.id)===-1);
+  const ids = new Set(all.map(p=>p.id));
+  return all.filter(p=>!p.parentId || !ids.has(p.parentId));
+}
+
+function renderTreeRow(p, depth, share){
+  const st = projectStats(p);
+  const kids = childProjects(p).filter(c=>inactiveProjects.indexOf(c.id)===-1);
+  const total = kids.reduce((a,c)=>a+Math.max(0.0001,c.weight||1), 0);
+  const bar = st.pct==null ? '' : `<div class="tree-bar"><span style="width:${st.pct}%;background:${HEALTH_BAR_COLOR[st.health]||'#06B6D4'}"></span></div>`;
+  return `
+    <div class="tree-row" style="padding-left:${depth*18}px">
+      <div class="tree-main">
+        <span class="tree-mark">${PROJECT_KINDS[p.kind||'project'].mark}</span>
+        <span class="clickable-title tree-title" data-action="open-project-report" data-id="${p.id}">${esc(p.title)}</span>
+        ${st.openRisks?`<span class="health-chip health-behind" title="Open risks and issues">⚠ ${st.openRisks}</span>`:''}
+        <span class="health-chip ${HEALTH_META[st.health].cls}">${HEALTH_META[st.health].label}</span>
+      </div>
+      <div class="tree-meta">
+        ${share!=null?`<span title="Share of its parent">${share}% of parent</span>`:''}
+        <span>${st.pct==null?'no plan':st.pct+'% complete'}</span>
+        ${st.budget!=null?`<span title="Spent against budget">${money(st.spent||0)} / ${withCurrency(st.budget)}</span>`:''}
+        ${st.cpi!=null?`<span style="${st.cpi<0.95?'color:var(--c-danger);font-weight:700':''}" title="Cost index — value earned ÷ money spent">CPI ${st.cpi.toFixed(2)}</span>`:''}
+      </div>
+      ${bar}
+    </div>
+    ${kids.map(c=>renderTreeRow(c, depth+1, total? Math.round(Math.max(0.0001,c.weight||1)/total*100) : null)).join('')}`;
+}
+
+function renderReportsPortfolioView(){
+  const all = projects().filter(p=>inactiveProjects.indexOf(p.id)===-1);
+  const leaves = all.filter(p=>!isContainerKind(p) && p.status!=='done');
+  const roots = portfolioRoots();
+  const count = k => all.filter(p=>(p.kind||'project')===k).length;
+  const budget = leaves.reduce((a,p)=>a+(p.budget||0), 0);
+  const spent  = leaves.reduce((a,p)=>a+(p.actualCost||0), 0);
+  const earned = leaves.reduce((a,p)=>{ const st=projectStats(p); return a+(st.earned||0); }, 0);
+  const cpi = (spent>0 && budget>0) ? earned/spent : null;
+  const risks = all.reduce((a,p)=>a+liveRisks(p).length, 0);
+  const worstRisk = all.reduce((a,p)=>Math.max(a, topRisk(p)), 0);
+  const c = currency();
+
+  return `
+    <div class="rollup-grid" style="margin-bottom:14px">
+      <div class="rollup-tile"><div class="v">${count('portfolio')}</div><div class="k">Portfolios</div></div>
+      <div class="rollup-tile"><div class="v">${count('program')}</div><div class="k">Programmes</div></div>
+      <div class="rollup-tile"><div class="v">${count('project')}</div><div class="k">Projects</div></div>
+      <div class="rollup-tile"><div class="v" style="${worstRisk>=15?'color:var(--c-danger)':worstRisk>=10?'color:var(--c-warn)':''}">${risks}</div><div class="k">Open risks</div></div>
+    </div>
+    ${budget? `<div class="rollup-grid" style="margin-bottom:14px">
+      <div class="rollup-tile"><div class="v">${money(budget)}</div><div class="k">Budget${c?' ('+esc(c)+')':''}</div></div>
+      <div class="rollup-tile"><div class="v">${money(spent)}</div><div class="k">Spent</div></div>
+      <div class="rollup-tile"><div class="v">${money(Math.round(earned))}</div><div class="k">Value earned</div></div>
+      <div class="rollup-tile"><div class="v" style="${cpi!=null&&cpi<0.95?'color:var(--c-danger);font-weight:700':''}">${cpi==null?'—':cpi.toFixed(2)}</div><div class="k">Cost index</div></div>
+    </div>` : ''}
+
+    ${donutCard('donut-portfolio-budget', roots.map(p=>({ label:p.title, value: Math.round(projectStats(p).budget||0) })), {
+      title:'Where the money is committed',
+      sub:'Budget by top-level item, with everything under it included.',
+      empty:'No budgets set yet. Edit a project and give it a budget to see this.',
+      fmt: n=>withCurrency(n) })}
+
+    <div class="section-label">The tree</div>
+    <div class="card" style="margin-bottom:18px;padding:8px 14px 14px">
+      ${roots.length ? roots.map(p=>renderTreeRow(p, 0, null)).join('')
+        : '<div class="view-sub" style="padding:14px 0">Nothing here yet. Make a portfolio or a programme, then edit a project and set what it sits under.</div>'}
+    </div>
+    <div class="view-sub">A programme or portfolio has no plan of its own: its completion, effort and budget are whatever sits under it, each by its weight among its siblings. One red project makes the programme above it red — that is the point of looking here.</div>
+  `;
 }
 
 function renderReportsCompareView(){
@@ -3262,6 +3710,12 @@ function renderReportsCompareView(){
       </div>
       <div class="view-sub" style="margin:8px 0 0">Effort sizes: S=1, M=2, L=3, XL=5. Habit consistency averages the active habits${domain==='all'?'':' in this area'}, each measured against its own schedule inside the period.</div>
     </div>
+
+    ${donutCard('donut-compare', B.byArea.map(a=>({ label:a.area, value:a.points })), {
+      title:`What ${esc(vs.label)} went on`,
+      sub:'Effort points closed in the later period, by life area.',
+      empty:'Nothing closed in the later period yet.',
+      fmt: n=>n+' pts' })}
 
     ${domain==='all' && areaRows.length? `
       <div class="section-label">By life area</div>
@@ -3417,9 +3871,9 @@ function renderSettingsView(){
     <div class="card" style="margin-bottom:22px;display:flex;align-items:center;justify-content:space-between;gap:12px">
       <div>
         <div style="font-weight:600;font-size:14.5px">Theme</div>
-        <div class="view-sub" style="margin-top:2px">Currently ${state.state.settings.themeMode==='dark'?'Dark':'Light'} mode.</div>
+        <div class="view-sub" style="margin-top:2px">Currently ${themeMode()==='dark'?'Dark':'Light'} mode, on this device only — your other devices keep their own.</div>
       </div>
-      <button class="btn" data-action="toggle-theme">${state.state.settings.themeMode==='dark'?'Switch to Light':'Switch to Dark'}</button>
+      <button class="btn" data-action="toggle-theme">${themeMode()==='dark'?'Switch to Light':'Switch to Dark'}</button>
     </div>
     <div class="card" style="margin-bottom:22px;display:flex;align-items:center;justify-content:space-between;gap:12px">
       <div>
@@ -3427,6 +3881,14 @@ function renderSettingsView(){
         <div class="view-sub" style="margin-top:2px">Number projects, milestones, tasks, inbox items and the Now pipeline, so you can refer to them by position.</div>
       </div>
       <button class="btn" data-action="toggle-numbering">${numbersOn()?'Turn off':'Turn on'}</button>
+    </div>
+    <div class="section-label">Money</div>
+    <div class="card" style="margin-bottom:22px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
+      <div style="min-width:200px;flex:1">
+        <div style="font-weight:600;font-size:14.5px">Currency label</div>
+        <div class="view-sub" style="margin-top:2px">Shown beside project budgets. A label only — nothing is ever converted, so use one currency per project and say which.</div>
+      </div>
+      <input class="search-box" style="max-width:140px;flex:0 0 auto" id="currency-input" type="text" value="${esc(currency())}" placeholder="ETB, USD…" data-action-change="set-currency"/>
     </div>
     <div class="section-label">Sync</div>
     <div class="card" style="margin-bottom:22px">
@@ -3724,17 +4186,26 @@ function modalEditHabit(h){
     </div>`);
 }
 
-function modalNewProject(){
+function modalNewProject(kind){
   const areas = state.state.lifeAreas;
+  kind = PROJECT_KINDS[kind] ? kind : 'project';
+  const parents = projects().filter(isContainerKind)
+    .filter(x=>kind==='program' ? x.kind==='portfolio' : kind==='project');
   openModal(`
-    <h3>New project</h3>
-    <div class="field"><label>Title</label><input id="np-title" placeholder="Project name" /></div>
+    <h3>New ${PROJECT_KINDS[kind].label.toLowerCase()}</h3>
+    <div class="field"><label>Title</label><input id="np-title" placeholder="${PROJECT_KINDS[kind].label} name" /></div>
+    <div class="field"><label>Level</label>
+      <select id="np-kind" data-action-change="new-project-kind">${Object.keys(PROJECT_KINDS).map(k=>`<option value="${k}" ${k===kind?'selected':''}>${PROJECT_KINDS[k].mark} ${PROJECT_KINDS[k].label} — ${esc(PROJECT_KINDS[k].sub)}</option>`).join('')}</select>
+    </div>
+    ${kind!=='portfolio' && parents.length ? `<div class="field"><label>Sits under (optional)</label>
+      <select id="np-parent"><option value="">Nothing — stands on its own</option>${parents.map(x=>`<option value="${esc(x.id)}">${PROJECT_KINDS[x.kind].mark} ${esc(x.title)}</option>`).join('')}</select></div>`:''}
     <div class="field"><label>Life Binder domain</label><select id="np-cat">${areas.map(a=>`<option value="${esc(a.name)}">${esc(a.name)}</option>`).join('')}</select></div>
     <div class="field"><label>Priority</label><select id="np-pri"><option value="low">Low</option><option value="medium" selected>Medium</option><option value="high">High</option></select></div>
     <div class="field"><label>Start date (optional)</label><input id="np-start" type="date"/><div class="view-sub" style="margin-top:4px">Leave blank to measure the schedule from today. Set it when work begins later.</div></div>
     <div class="field"><label>Due date (optional)</label><input id="np-due" type="date"/></div>
     <div class="field"><label>Assignee (optional)</label><input id="np-assignee" type="text" placeholder="Who's this for?"/></div>
-    <div class="field"><label>Milestones (optional, one per line)</label><textarea id="np-milestones" rows="4" placeholder="First milestone…"></textarea></div>
+    ${kind==='project' ? `<div class="field"><label>Milestones (optional, one per line)</label><textarea id="np-milestones" rows="4" placeholder="First milestone…"></textarea></div>`
+      : `<div class="view-sub" style="margin-bottom:12px">A ${PROJECT_KINDS[kind].label.toLowerCase()} has no milestones of its own — it reports whatever you put under it.</div>`}
     <div class="modal-actions">
       <button class="btn" data-action="close-modal">Cancel</button>
       <button class="btn btn-primary" data-action="confirm-new-project">Create</button>
@@ -3964,11 +4435,179 @@ function modalRenameSubtask(p, sub){
   openModal(`
     <h3>Rename milestone</h3>
     <div class="field"><label>Title</label><input id="ms-title" value="${esc(sub.title)}" data-action-enter="confirm-rename-subtask" data-id="${p.id}" data-sub="${sub.id}"/></div>
+    ${sub.done ? '' : `<div class="field"><label>Part done</label>
+      <input id="ms-pct" type="number" min="0" max="99" step="5" placeholder="0" value="${sub.pct||''}"/>
+      <div class="view-sub" style="margin-top:4px">A milestone is a tick by default. A long one — a build phase, a licence application — can report how far through it is instead, and that share counts towards the project's completion.</div>
+    </div>`}
     <div class="modal-actions">
       <button class="btn" data-action="close-modal">Cancel</button>
       <button class="btn btn-primary" data-action="confirm-rename-subtask" data-id="${p.id}" data-sub="${sub.id}">Save</button>
     </div>`);
   setTimeout(()=>{ const el=qs('#ms-title'); if(el){ el.focus(); el.select(); } },0);
+}
+
+/* =========================================================
+   The project office: money, risk, details, log
+
+   These are the parts a tracker has and a to-do list does not. Every one is
+   optional — a project that uses none of them shows none of them. */
+
+function moneyPanel(st){
+  if(st.budget==null && st.spent==null) return '';
+  const c = currency();
+  const tone = (v, bad, warn) => v==null ? '' : v<bad ? 'color:var(--c-danger);font-weight:700'
+                                : v<warn ? 'color:var(--c-warn);font-weight:700' : 'color:var(--c-good);font-weight:700';
+  const idx = v => v==null ? '—' : v.toFixed(2);
+  const over = st.forecast!=null && st.budget && st.forecast > st.budget*1.05;
+  return `
+    <div class="section-label">Budget</div>
+    <div class="rollup-grid" style="margin-bottom:8px">
+      <div class="rollup-tile"><div class="v">${money(st.budget)}</div><div class="k">Budget${c?' ('+esc(c)+')':''}</div></div>
+      <div class="rollup-tile"><div class="v">${money(st.spent)}</div><div class="k">Spent</div></div>
+      <div class="rollup-tile"><div class="v">${money(st.earned)}</div><div class="k">Value earned</div></div>
+      <div class="rollup-tile"><div class="v" style="${over?'color:var(--c-danger);font-weight:700':''}">${money(st.forecast)}</div><div class="k">Forecast total</div></div>
+    </div>
+    <div class="rollup-grid" style="margin-bottom:8px">
+      <div class="rollup-tile"><div class="v" style="${tone(st.spi,0.9,1)}">${idx(st.spi)}</div><div class="k">Schedule index</div></div>
+      <div class="rollup-tile"><div class="v" style="${tone(st.cpi,0.95,1)}">${idx(st.cpi)}</div><div class="k">Cost index</div></div>
+    </div>
+    <div class="view-sub" style="margin-bottom:16px">
+      Value earned is what this much completion is worth against the budget. Schedule index is completion ÷ time spent, cost index is value earned ÷ money spent — 1.00 is exactly on plan, under 1.00 is behind or over.
+      ${over? ` At this rate it is forecast to cost ${withCurrency(Math.round(st.forecast))} against a budget of ${withCurrency(st.budget)}.`:''}
+      Amounts show exactly as entered; nothing is ever converted.
+    </div>`;
+}
+
+/* Probability against impact, five by five, with the live entries placed on it.
+   A table rather than a picture, so it reads the same on a phone. */
+function riskHeatMap(list){
+  const cells = {};
+  list.forEach(r=>{ const k=r.probability+'x'+r.impact; (cells[k]=cells[k]||[]).push(r); });
+  const tone = sc => sc>=15 ? 'var(--c-danger)' : sc>=10 ? 'var(--c-warn)' : sc>=5 ? 'var(--c-info)' : 'var(--c-good)';
+  let rows = '';
+  for(let pr=5; pr>=1; pr--){
+    rows += `<tr><th class="heat-axis">${RAID_SCALE[pr]}</th>` + [1,2,3,4,5].map(im=>{
+      const here = cells[pr+'x'+im]||[];
+      const sc = pr*im;
+      return `<td class="heat-cell" style="background:${here.length?tone(sc):'transparent'};opacity:${here.length?1:.25}"
+        title="${RAID_SCALE[pr]} chance, ${RAID_SCALE[im]} impact — score ${sc}${here.length?': '+esc(here.map(r=>r.title).join(', ')):''}">${here.length||''}</td>`;
+    }).join('') + '</tr>';
+  }
+  return `<table class="heat"><tbody>${rows}
+    <tr><th></th>${[1,2,3,4,5].map(im=>`<td class="heat-axis heat-foot">${RAID_SCALE[im]}</td>`).join('')}</tr>
+  </tbody></table>
+  <div class="view-sub" style="margin:4px 0 0">Down: how likely. Across: how much it would hurt. Anything scoring 15 or more drags the project's health to off track on its own.</div>`;
+}
+
+function raidPanel(p){
+  const list = (p.risks||[]).slice().sort((a,b)=>riskScore(b)-riskScore(a));
+  const live = liveRisks(p);
+  return `
+    <div class="section-label" style="display:flex;justify-content:space-between;align-items:center">
+      <span>Risks, issues, assumptions, dependencies</span>
+      <button class="btn btn-sm" data-action="add-risk" data-id="${p.id}">+ Add</button>
+    </div>
+    ${list.length ? `
+      <div class="mini-table-wrap"><table class="mini-table">
+        <thead><tr><th>What</th><th>Type</th><th class="num">Score</th><th>State</th><th class="num"></th></tr></thead>
+        <tbody>
+          ${list.map(r=>`<tr>
+            <td>${esc(r.title)}${r.owner?`<div class="view-sub" style="margin:2px 0 0">${esc(r.owner)}</div>`:''}${r.response?`<div class="view-sub" style="margin:2px 0 0">→ ${esc(r.response)}</div>`:''}</td>
+            <td>${RAID_TYPES[r.type].label}</td>
+            <td class="num" style="${riskScore(r)>=15?'color:var(--c-danger);font-weight:700':riskScore(r)>=10?'color:var(--c-warn);font-weight:700':''}">${r.status==='closed'?'—':riskScore(r)}</td>
+            <td>${RAID_STATES[r.status]}</td>
+            <td class="num"><span class="row-tools">
+              <button class="icon-btn btn-sm" data-action="edit-risk" data-id="${p.id}" data-risk="${r.id}" title="Edit">✎</button>
+              <button class="icon-btn btn-sm btn-danger" data-action="delete-risk" data-id="${p.id}" data-risk="${r.id}" title="Delete">✕</button>
+            </span></td>
+          </tr>`).join('')}
+        </tbody>
+      </table></div>
+      ${live.length ? `<div style="margin-top:10px">${riskHeatMap(live)}</div>` : '<div class="view-sub" style="margin-top:8px">Nothing live — every entry is closed.</div>'}
+    ` : `<div class="view-sub" style="margin-bottom:12px">Nothing logged. A risk is something that might happen; an issue already has.</div>`}`;
+}
+
+function fieldsPanel(p){
+  return `
+    <div class="section-label" style="display:flex;justify-content:space-between;align-items:center">
+      <span>Details</span>
+      <button class="btn btn-sm" data-action="add-field" data-id="${p.id}">+ Add</button>
+    </div>
+    ${p.ref? `<div class="frow2"><div class="fk2">Reference</div><div>${esc(p.ref)}</div></div>`:''}
+    ${(p.fields||[]).map(f=>`<div class="frow2">
+      <div class="fk2">${esc(f.label)}</div>
+      <div style="display:flex;gap:8px;align-items:flex-start;justify-content:space-between">
+        <span style="min-width:0;word-break:break-word">${esc(f.value)}</span>
+        <button class="icon-btn btn-sm btn-danger" data-action="delete-field" data-id="${p.id}" data-field="${f.id}" title="Remove">✕</button>
+      </div>
+    </div>`).join('')}
+    ${(!p.ref && !(p.fields||[]).length) ? '<div class="view-sub" style="margin-bottom:12px">Nothing yet — vendor, container number, contract, whatever this project needs you to remember.</div>' : '<div style="margin-bottom:12px"></div>'}`;
+}
+
+function logPanel(p){
+  const list = (p.log||[]).slice().sort((a,b)=>String(b.at).localeCompare(String(a.at)));
+  return `
+    <div class="section-label">What happened</div>
+    <div class="sub-add" style="margin:0 0 10px">
+      <input type="text" data-role="proj-log" placeholder="Note what moved, or did not…" data-action-enter="add-log" data-id="${esc(p.id)}"/>
+      <button class="btn btn-sm" data-action="add-log" data-id="${p.id}">Add</button>
+    </div>
+    ${list.length ? `<ul style="margin:0 0 12px;padding:0;list-style:none">
+      ${list.map(l=>`<li style="font-size:13.5px;padding:6px 0;border-top:1px solid var(--c-border);display:flex;gap:10px;align-items:flex-start">
+        <span class="view-sub" style="margin:0;flex:0 0 auto;white-space:nowrap">${fmtHistoryDate(l.at)}</span>
+        <span style="flex:1;min-width:0;word-break:break-word">${esc(l.text)}</span>
+        <button class="icon-btn btn-sm btn-danger" data-action="delete-log" data-id="${p.id}" data-log="${l.id}" title="Remove">✕</button>
+      </li>`).join('')}
+    </ul>` : '<div class="view-sub" style="margin-bottom:12px">Nothing noted yet.</div>'}`;
+}
+
+/* What a programme or portfolio has instead of milestones. */
+function childrenPanel(st){
+  if(!st.container) return '';
+  const total = st.children.reduce((a,x)=>a+Math.max(0.0001,x.c.weight||1), 0);
+  return `
+    <div class="section-label">What is under it</div>
+    ${st.children.length ? `<div class="mini-table-wrap"><table class="mini-table">
+      <thead><tr><th>Item</th><th class="num">Share</th><th class="num">Complete</th><th>Health</th></tr></thead>
+      <tbody>
+        ${st.children.map(x=>`<tr class="row-link" data-action="open-project-report" data-id="${x.c.id}">
+          <td>${PROJECT_KINDS[x.c.kind||'project'].mark} ${esc(x.c.title)}</td>
+          <td class="num">${Math.round(Math.max(0.0001,x.c.weight||1)/total*100)}%</td>
+          <td class="num">${x.st.pct==null?'—':x.st.pct+'%'}</td>
+          <td>${HEALTH_META[x.st.health].label}</td>
+        </tr>`).join('')}
+      </tbody>
+    </table></div><div class="view-sub" style="margin:6px 0 14px">Share is this item's weight against its siblings — that is how its completion, effort and budget roll up into this one.</div>`
+    : '<div class="view-sub" style="margin-bottom:14px">Nothing under it yet. Edit a project and set this one as what it sits under.</div>'}`;
+}
+
+function modalEditRisk(p, risk){
+  const r = risk || { id:null, type:'risk', title:'', probability:3, impact:3, status:'open', owner:'', response:'' };
+  const scale = sel => [1,2,3,4,5].map(n=>`<option value="${n}" ${n===r[sel]?'selected':''}>${n} — ${RAID_SCALE[n]}</option>`).join('');
+  openModal(`
+    <h3>${risk?'Edit':'Add'} — ${esc(p.title)}</h3>
+    <div class="field"><label>What is it</label><input id="rk-title" value="${esc(r.title)}" placeholder="Crane slot may not be free in time"/></div>
+    <div class="field"><label>Type</label><select id="rk-type">${Object.keys(RAID_TYPES).map(k=>`<option value="${k}" ${k===r.type?'selected':''}>${RAID_TYPES[k].label} — ${esc(RAID_TYPES[k].sub)}</option>`).join('')}</select></div>
+    <div class="field"><label>How likely</label><select id="rk-prob">${scale('probability')}</select></div>
+    <div class="field"><label>How much it would hurt</label><select id="rk-impact">${scale('impact')}</select></div>
+    <div class="field"><label>State</label><select id="rk-status">${Object.keys(RAID_STATES).map(k=>`<option value="${k}" ${k===r.status?'selected':''}>${RAID_STATES[k]}</option>`).join('')}</select></div>
+    <div class="field"><label>Whose it is</label><input id="rk-owner" value="${esc(r.owner)}" placeholder="Optional"/></div>
+    <div class="field"><label>What you will do about it</label><input id="rk-response" value="${esc(r.response)}" placeholder="Optional"/></div>
+    <div class="modal-actions">
+      <button class="btn" data-action="open-project-report" data-id="${p.id}">Cancel</button>
+      <button class="btn btn-primary" data-action="save-risk" data-id="${p.id}" data-risk="${r.id||''}">Save</button>
+    </div>`);
+}
+
+function modalAddField(p){
+  openModal(`
+    <h3>Add a detail — ${esc(p.title)}</h3>
+    <div class="field"><label>Label</label><input id="fd-label" placeholder="Vendor, container no., contract…"/></div>
+    <div class="field"><label>Value</label><input id="fd-value" placeholder="What it is"/></div>
+    <div class="modal-actions">
+      <button class="btn" data-action="open-project-report" data-id="${p.id}">Cancel</button>
+      <button class="btn btn-primary" data-action="save-field" data-id="${p.id}">Save</button>
+    </div>`);
 }
 
 function modalProjectDetail(p){
@@ -3985,7 +4624,12 @@ function modalProjectDetail(p){
       ${p.assignee?`<span class="chip">👤 ${esc(p.assignee)}</span>`:''}
       ${healthChip(st)}
       ${stalledChip(st)}
+      ${p.healthOverride?`<span class="chip" title="Health was set by hand, not worked out from the numbers">set by hand</span>`:''}
+      ${st.openRisks?`<span class="chip" style="color:var(--c-danger);border-color:var(--c-danger)">${st.openRisks} open risk${st.openRisks===1?'':'s'}</span>`:''}
     </div>
+    ${(p.kind && p.kind!=='project') || p.parentId ? `<div class="view-sub" style="margin:-6px 0 10px">
+      ${PROJECT_KINDS[p.kind||'project'].mark} ${PROJECT_KINDS[p.kind||'project'].label}${ancestry(p).length? ' · ' + ancestry(p).map(a=>esc(a.title)).join(' › ') + ' › ' + esc(p.title) : ''}
+    </div>`:''}
     ${progressBar(st, 'margin-bottom:8px')}
     ${st.hasPlan ? `
       <div class="rollup-grid" style="margin-bottom:12px">
@@ -3995,7 +4639,7 @@ function modalProjectDetail(p){
         <div class="rollup-tile"><div class="v" style="color:${st.daysLeft!=null&&st.daysLeft<0?'var(--c-danger)':'inherit'}">${st.daysLeft==null?'—':st.daysLeft<0?Math.abs(st.daysLeft)+'d late':st.daysLeft+'d'}</div><div class="k">${st.daysLeft!=null&&st.daysLeft<0?'Overdue by':'Days left'}</div></div>
       </div>
       <div class="view-sub" style="margin-bottom:16px">
-        ${st.done}/${st.total} steps · ${st.weightDone}/${st.weightTotal} effort points · unweighted this would read ${st.countPct}%.
+        ${st.done}/${st.total} steps · ${pts(st.weightDone)}/${pts(st.weightTotal)} effort points · unweighted this would read ${st.countPct}%.
         ${st.lastActivityMs? `Last step closed ${st.daysSinceActivity===0?'today':st.daysSinceActivity+'d ago'}.` : 'No step has been closed yet.'}
         Schedule measured from ${fmtHistoryDate(st.startMs)}${st.startedFromDate?' (start date)':' (created — set a start date if work began later)'}${p.dueDate?` to ${fmtHistoryDate(p.dueDate+'T00:00:00')}`:''}.
         ${st.notStarted?'<b>Not started yet</b> — the schedule clock begins on the start date.':''}
@@ -4010,14 +4654,20 @@ function modalProjectDetail(p){
         Created ${fmtHistoryDate(p.createdAt)}${p.startDate?` · starts ${fmtHistoryDate(p.startDate+'T00:00:00')}`:''}.
       </div>
     `}
+    ${moneyPanel(st)}
+    ${childrenPanel(st)}
+    ${st.container ? '' : `
     <div class="section-label">Milestones</div>
     <ul style="margin:0 0 14px 0;padding:0;list-style:none">
-      ${p.subtasks.map(s=>`<li style="font-size:13.5px;padding:4px 0;${s.done?'text-decoration:line-through;color:var(--c-text-muted)':''}">${s.done?'☑':'☐'} ${eff(s.effort)} ${esc(s.title)}</li>`).join('') || '<li class="view-sub">None.</li>'}
+      ${p.subtasks.map(s=>`<li style="font-size:13.5px;padding:4px 0;${s.done?'text-decoration:line-through;color:var(--c-text-muted)':''}">${s.done?'☑':'☐'} ${eff(s.effort)} ${esc(s.title)}${(!s.done && s.pct)?` <span style="color:var(--c-info);font-weight:600">${s.pct}%</span>`:''}</li>`).join('') || '<li class="view-sub">None.</li>'}
     </ul>
     <div class="section-label">Tasks</div>
-    <ul style="margin:0;padding:0;list-style:none">
+    <ul style="margin:0 0 14px;padding:0;list-style:none">
       ${children.map(c=>`<li style="font-size:13.5px;padding:4px 0;${c.status==='done'?'text-decoration:line-through;color:var(--c-text-muted)':''}">${c.status==='done'?'☑':'☐'} ${eff(c.effort)} ${esc(c.title)}${c.dueDate?` <span style="color:var(--c-text-muted)">(${fmtDue(c.dueDate)})</span>`:''}${c.assignee?` <span style="color:var(--c-text-muted)">— ${esc(c.assignee)}</span>`:''}</li>`).join('') || '<li class="view-sub">None.</li>'}
-    </ul>
+    </ul>`}
+    ${raidPanel(p)}
+    ${fieldsPanel(p)}
+    ${logPanel(p)}
     <div class="modal-actions">
       <button class="btn" data-action="open-editor" data-id="${p.id}">Edit</button>
       <button class="btn" data-action="export-project" data-id="${p.id}">Export report</button>
@@ -4124,9 +4774,41 @@ function modalConfirmDeleteArea(area){
     </div>`);
 }
 
+/* Where an item may sit: a programme under a portfolio, a project under either.
+   Everything below the item itself is excluded, or the tree would loop. */
+function parentOptions(p){
+  const kind = p.kind || 'project';
+  if(kind === 'portfolio') return [];
+  const banned = new Set([p.id]);
+  (function below(x){ childProjects(x).forEach(c=>{ if(!banned.has(c.id)){ banned.add(c.id); below(c); } }); })(p);
+  return projects().filter(x=>!banned.has(x.id) && (kind==='program' ? x.kind==='portfolio' : isContainerKind(x)));
+}
+
 function modalEditItem(item){
   const areaNames = ['Inbox', ...state.state.lifeAreas.map(a=>a.name)];
   const projectOptions = projects().filter(p=>p.id!==item.id);
+  const isProj = item.type==='project';
+  const kind = item.kind || 'project';
+  const parents = isProj ? parentOptions(item) : [];
+  const c = currency();
+  const depth = isProj ? `
+    <div class="field"><label>Level</label>
+      <select id="ed-kind">${Object.keys(PROJECT_KINDS).map(k=>`<option value="${k}" ${k===kind?'selected':''}>${PROJECT_KINDS[k].mark} ${PROJECT_KINDS[k].label} — ${esc(PROJECT_KINDS[k].sub)}</option>`).join('')}</select>
+      <div class="view-sub" style="margin-top:4px">A programme or portfolio has no milestones of its own: it reports what the things under it add up to.</div>
+    </div>
+    ${kind!=='portfolio' ? `<div class="field"><label>Sits under</label>
+      <select id="ed-parent"><option value="">Nothing — stands on its own</option>${parents.map(x=>`<option value="${esc(x.id)}" ${x.id===item.parentId?'selected':''}>${PROJECT_KINDS[x.kind||'project'].mark} ${esc(x.title)}</option>`).join('')}</select>
+      ${parents.length?'':'<div class="view-sub" style="margin-top:4px">Nothing to sit under yet — make a programme or a portfolio first.</div>'}
+    </div>
+    <div class="field"><label>Weight in its parent</label><input id="ed-weight" type="number" min="0.1" step="0.1" value="${item.weight||1}"/>
+      <div class="view-sub" style="margin-top:4px">How much of the parent this one counts for, next to its siblings. Two at 1 and one at 3 means the third carries 60%.</div>
+    </div>` : ''}
+    <div class="field"><label>Reference</label><input id="ed-ref" type="text" placeholder="Order no., PO, contract, container…" value="${esc(item.ref||'')}"/></div>
+    <div class="field"><label>Budget${c?' ('+esc(c)+')':''}</label><input id="ed-budget" type="number" min="0" step="1" placeholder="Optional" value="${item.budget!=null?item.budget:''}"/></div>
+    <div class="field"><label>Spent so far${c?' ('+esc(c)+')':''}</label><input id="ed-spent" type="number" min="0" step="1" placeholder="Optional" value="${item.actualCost!=null?item.actualCost:''}"/></div>
+    <div class="field"><label>Health</label>
+      <select id="ed-health"><option value="">Work it out from the numbers</option>${['ahead','ontrack','risk','behind'].map(h=>`<option value="${h}" ${h===item.healthOverride?'selected':''}>Say it is ${HEALTH_META[h].label.toLowerCase()}</option>`).join('')}</select>
+    </div>` : '';
   openModal(`
     <h3>Edit ${item.type==='project'?'project':'item'}</h3>
     <div class="field"><label>Title</label><input id="ed-title" value="${esc(item.title)}"/></div>
@@ -4136,6 +4818,7 @@ function modalEditItem(item){
     ${item.type==='project'? `<div class="field"><label>Start date</label><input id="ed-start" type="date" value="${item.startDate||''}"/><div class="view-sub" style="margin-top:4px">When work actually began. Blank measures the schedule from ${fmtHistoryDate(item.createdAt)}, when the project was created.</div></div>`:''}
     <div class="field"><label>Due date</label><input id="ed-due" type="date" value="${item.dueDate||''}"/></div>
     <div class="field"><label>Assignee</label><input id="ed-assignee" type="text" placeholder="Who's this for? (optional)" value="${esc(item.assignee||'')}"/></div>
+    ${depth}
     <div class="modal-actions">
       <button class="btn" data-action="close-modal">Cancel</button>
       <button class="btn btn-primary" data-action="confirm-edit" data-id="${item.id}">Save</button>
@@ -4657,7 +5340,7 @@ function exportProjectReport(p){
     <table cellpadding="6" cellspacing="0" border="1" style="border-collapse:collapse;border-color:#E2E8F0">
       <tr><td><b>Complete (effort-weighted)</b></td><td>${st.pct}%</td></tr>
       <tr><td>Unweighted step count</td><td>${st.countPct}% (${st.done} of ${st.total} steps)</td></tr>
-      <tr><td>Effort closed</td><td>${st.weightDone} of ${st.weightTotal} points</td></tr>
+      <tr><td>Effort closed</td><td>${pts(st.weightDone)} of ${pts(st.weightTotal)} points</td></tr>
       <tr><td>Schedule window</td><td>${new Date(st.startMs).toLocaleDateString()}${st.startedFromDate?' (start date)':' (project created)'}${p.dueDate?' → '+p.dueDate:' → no due date'}</td></tr>
       <tr><td>Schedule spent</td><td>${st.timePct==null?'No due date set':Math.round(st.timePct)+'% of the window'}</td></tr>
       <tr><td>Schedule variance</td><td>${st.variance==null?'—':(st.variance>0?'+':'')+st.variance+' pts (' + HEALTH_META[st.health].label + ')'}</td></tr>
@@ -4684,7 +5367,7 @@ function exportPortfolioReport(){
     <p class="muted">Generated ${new Date().toLocaleDateString(undefined,{year:'numeric',month:'long',day:'numeric'})} &nbsp;·&nbsp; ${port.total} active project${port.total===1?'':'s'}</p>
     <h2>At a glance</h2>
     <table cellpadding="6" cellspacing="0" border="1" style="border-collapse:collapse;border-color:#E2E8F0">
-      <tr><td><b>Weighted completion</b></td><td>${port.weightedPct==null?'—':port.weightedPct+'%'} (${port.weightDone} of ${port.weightTotal} effort points)</td></tr>
+      <tr><td><b>Weighted completion</b></td><td>${port.weightedPct==null?'—':port.weightedPct+'%'} (${pts(port.weightDone)} of ${pts(port.weightTotal)} effort points)</td></tr>
       <tr><td>Average project completion</td><td>${port.simplePct==null?'—':port.simplePct+'%'}</td></tr>
       <tr><td>Off track (behind / at risk / overdue)</td><td>${port.offTrack}</td></tr>
       <tr><td>Stalled ${STALL_DAYS}+ days</td><td>${port.stalledCount}</td></tr>
@@ -4693,7 +5376,7 @@ function exportPortfolioReport(){
     <h2>By domain</h2>
     <table cellpadding="6" cellspacing="0" border="1" style="border-collapse:collapse;border-color:#E2E8F0">
       <tr><th align="left">Domain</th><th align="right">Projects</th><th align="right">Weighted %</th><th align="right">Effort done</th><th align="right">Off track</th><th align="right">No plan</th></tr>
-      ${port.byArea.map(a=>`<tr><td>${esc(a.area)}</td><td align="right">${a.count}</td><td align="right">${a.pct==null?'—':a.pct+'%'}</td><td align="right">${a.weightDone}/${a.weightTotal||0}</td><td align="right">${a.offTrack}</td><td align="right">${a.noPlan}</td></tr>`).join('')}
+      ${port.byArea.map(a=>`<tr><td>${esc(a.area)}</td><td align="right">${a.count}</td><td align="right">${a.pct==null?'—':a.pct+'%'}</td><td align="right">${pts(a.weightDone)}/${pts(a.weightTotal||0)}</td><td align="right">${a.offTrack}</td><td align="right">${a.noPlan}</td></tr>`).join('')}
     </table>
     <h2>Projects</h2>
     <table cellpadding="6" cellspacing="0" border="1" style="border-collapse:collapse;border-color:#E2E8F0">
@@ -4758,6 +5441,49 @@ function exportHabitsReport(){
     </table>`;
   downloadWordDoc(`habits-${todayISO()}.doc`, 'Habits', html);
   pushToast('Habits report downloaded');
+}
+
+function exportPortfolioTreeReport(){
+  const all = projects().filter(p=>inactiveProjects.indexOf(p.id)===-1);
+  const ids = new Set(all.map(p=>p.id));
+  const roots = all.filter(p=>!p.parentId || !ids.has(p.parentId));
+  const c = currency();
+  const rows = [];
+  roots.forEach(p=>{ (function walk(q, d){
+    const st = projectStats(q);
+    rows.push(`<tr>
+      <td>${'&nbsp;'.repeat(d*4)}${PROJECT_KINDS[q.kind||'project'].mark} ${esc(q.title)}</td>
+      <td>${PROJECT_KINDS[q.kind||'project'].label}</td>
+      <td>${esc(q.category)}</td>
+      <td align="right">${q.weight||1}</td>
+      <td align="right">${st.pct==null?'—':st.pct+'%'}</td>
+      <td align="right">${st.budget==null?'—':money(st.budget)}</td>
+      <td align="right">${st.spent==null?'—':money(st.spent)}</td>
+      <td align="right">${st.cpi==null?'—':st.cpi.toFixed(2)}</td>
+      <td align="right">${st.openRisks||0}</td>
+      <td>${HEALTH_META[st.health].label}</td>
+    </tr>`);
+    childProjects(q).filter(x=>inactiveProjects.indexOf(x.id)===-1).forEach(x=>walk(x, d+1));
+  })(p, 0); });
+
+  const live = [];
+  all.forEach(p=>liveRisks(p).forEach(r=>live.push({p, r})));
+  live.sort((a,b)=>riskScore(b.r)-riskScore(a.r));
+
+  const html = `<h1>Portfolio</h1>
+    <p class="muted">Generated ${new Date().toLocaleDateString(undefined,{year:'numeric',month:'long',day:'numeric'})}${c?` &nbsp;·&nbsp; amounts in ${esc(c)}`:''}</p>
+    <table cellpadding="6" cellspacing="0" border="1" style="border-collapse:collapse;border-color:#E2E8F0">
+      <tr><th align="left">Item</th><th align="left">Level</th><th align="left">Domain</th><th align="right">Weight</th><th align="right">Complete</th><th align="right">Budget</th><th align="right">Spent</th><th align="right">CPI</th><th align="right">Risks</th><th align="left">Health</th></tr>
+      ${rows.join('')}
+    </table>
+    ${live.length? `<h2>Open risks and issues</h2>
+    <table cellpadding="6" cellspacing="0" border="1" style="border-collapse:collapse;border-color:#E2E8F0">
+      <tr><th align="left">Item</th><th align="left">What</th><th align="left">Type</th><th align="right">Score</th><th align="left">State</th><th align="left">Owner</th><th align="left">Response</th></tr>
+      ${live.map(x=>`<tr><td>${esc(x.p.title)}</td><td>${esc(x.r.title)}</td><td>${RAID_TYPES[x.r.type].label}</td><td align="right">${riskScore(x.r)}</td><td>${RAID_STATES[x.r.status]}</td><td>${esc(x.r.owner||'—')}</td><td>${esc(x.r.response||'—')}</td></tr>`).join('')}
+    </table>`:''}
+    <p class="muted">A programme or portfolio reports what sits under it, each child by its weight among its siblings. Complete is effort-weighted. CPI is value earned ÷ money spent — under 1.00 means over budget for the progress made. Risk score is how likely × how much it would hurt, on 1–5 each.</p>`;
+  downloadWordDoc(`portfolio-${todayISO()}.doc`, 'Portfolio', html);
+  pushToast('Portfolio downloaded');
 }
 
 function exportCompareReport(){
@@ -4953,11 +5679,12 @@ function handleAction(action, el){
     case 'toggle-nav': ui.navOpen = !ui.navOpen; render(); break;
     case 'close-nav': ui.navOpen = false; render(); break;
     case 'toggle-sidebar': ui.sidebarCollapsed = !ui.sidebarCollapsed; render(); break;
+    case 'set-currency': state.state.settings.currency = el.value.trim().slice(0,8); persist(); break;
     case 'sync-now': syncNow().then(()=>{ if(!sync.error) pushToast('↻ In sync'); render(); }); break;
     case 'toggle-numbering': state.state.settings.numberLists = !numbersOn(); persist(); break;
     case 'toggle-theme':
-      state.state.settings.themeMode = state.state.settings.themeMode==='dark' ? 'light':'dark';
-      persist(); break;
+      setThemeMode(themeMode()==='dark' ? 'light':'dark');
+      render(); break;
 
     case 'process-inbox': ui.processInbox = true; ui.triageIndex = 0; ui.triageSkipped = []; render(); break;
     case 'exit-triage': ui.processInbox = false; render(); break;
@@ -5021,6 +5748,7 @@ function handleAction(action, el){
     case 'export-report': {
       const t = ui.reportsTab;
       if(t==='areas') exportAreasReport();
+      else if(t==='portfolio') exportPortfolioTreeReport();
       else if(t==='compare') exportCompareReport();
       else if(t==='habits') exportHabitsReport();
       else if(t==='timeline') exportTimelineReport();
@@ -5107,7 +5835,14 @@ function handleAction(action, el){
     case 'confirm-rename-subtask': {
       const proj = byId(id), sub = proj && (proj.subtasks||[]).find(x=>x.id===el.getAttribute('data-sub'));
       const val = qs('#ms-title') && qs('#ms-title').value.trim();
-      if(sub && val){ sub.title = val; closeModal(); persist(); }
+      if(sub && val){
+        sub.title = val;
+        if(qs('#ms-pct')){
+          const n = Math.round(Number(qs('#ms-pct').value));
+          sub.pct = (n>0 && n<100) ? n : null;
+        }
+        closeModal(); persist();
+      }
       break;
     }
     case 'delete-subtask': {
@@ -5195,6 +5930,17 @@ function handleAction(action, el){
         if(qs('#ed-start')) item.startDate = edStart;
         item.dueDate = edDue;
         item.assignee = qs('#ed-assignee').value.trim() || null;
+        if(qs('#ed-kind')){
+          const num = sel => { const el = qs(sel); if(!el || el.value==='') return null; const n = Number(el.value); return isNaN(n)||n<0 ? null : n; };
+          item.kind = PROJECT_KINDS[qs('#ed-kind').value] ? qs('#ed-kind').value : 'project';
+          if(item.kind==='portfolio') item.parentId = null;
+          else if(qs('#ed-parent')) item.parentId = qs('#ed-parent').value || null;
+          const w = num('#ed-weight'); item.weight = w>0 ? w : 1;
+          item.ref = qs('#ed-ref').value.trim();
+          item.budget = num('#ed-budget');
+          item.actualCost = num('#ed-spent');
+          item.healthOverride = HEALTH_META[qs('#ed-health').value] ? qs('#ed-health').value : null;
+        }
         closeModal(); persist();
       }
       break;
@@ -5206,6 +5952,77 @@ function handleAction(action, el){
 
     case 'open-area': { const a = state.state.lifeAreas.find(x=>x.name===el.getAttribute('data-area')); if(a) modalAreaDetail(a); break; }
     case 'open-project-report': { const p = byId(id); if(p) modalProjectDetail(p); break; }
+
+    /* The project office. Each of these re-opens the project's own panel when it
+       is done, so the modal never closes out from under what you were reading. */
+    case 'add-risk': { const pr = byId(id); if(pr) modalEditRisk(pr, null); break; }
+    case 'edit-risk': {
+      const pr = byId(id);
+      const r = pr && (pr.risks||[]).find(x=>x.id===el.getAttribute('data-risk'));
+      if(r) modalEditRisk(pr, r);
+      break;
+    }
+    case 'save-risk': {
+      const pr = byId(id);
+      if(!pr) break;
+      const title = qs('#rk-title').value.trim();
+      if(!title){ pushToast('Give it a name first'); break; }
+      const rid = el.getAttribute('data-risk');
+      const found = rid ? (pr.risks||[]).find(x=>x.id===rid) : null;
+      const next = found || { id: uid() };
+      next.title = title;
+      next.type = RAID_TYPES[qs('#rk-type').value] ? qs('#rk-type').value : 'risk';
+      next.probability = Math.min(5, Math.max(1, Number(qs('#rk-prob').value)||3));
+      next.impact = Math.min(5, Math.max(1, Number(qs('#rk-impact').value)||3));
+      next.status = RAID_STATES[qs('#rk-status').value] ? qs('#rk-status').value : 'open';
+      next.owner = qs('#rk-owner').value.trim();
+      next.response = qs('#rk-response').value.trim();
+      if(!found){ pr.risks = pr.risks||[]; pr.risks.push(next); }
+      persist(); modalProjectDetail(pr);
+      break;
+    }
+    case 'delete-risk': {
+      const pr = byId(id);
+      if(!pr) break;
+      pr.risks = (pr.risks||[]).filter(x=>x.id!==el.getAttribute('data-risk'));
+      persist(); modalProjectDetail(pr);
+      break;
+    }
+    case 'add-field': { const pr = byId(id); if(pr) modalAddField(pr); break; }
+    case 'save-field': {
+      const pr = byId(id);
+      if(!pr) break;
+      const label = qs('#fd-label').value.trim();
+      if(!label){ pushToast('Give it a label first'); break; }
+      pr.fields = pr.fields||[];
+      pr.fields.push({ id: uid(), label, value: qs('#fd-value').value.trim() });
+      persist(); modalProjectDetail(pr);
+      break;
+    }
+    case 'delete-field': {
+      const pr = byId(id);
+      if(!pr) break;
+      pr.fields = (pr.fields||[]).filter(f=>f.id!==el.getAttribute('data-field'));
+      persist(); modalProjectDetail(pr);
+      break;
+    }
+    case 'add-log': {
+      const pr = byId(id);
+      const box = qs('input[data-role="proj-log"][data-id="'+cssEscape(id)+'"]');
+      const text = box ? box.value.trim() : '';
+      if(!pr || !text) break;
+      pr.log = pr.log||[];
+      pr.log.push({ id: uid(), at: new Date().toISOString(), text });
+      persist(); modalProjectDetail(pr);
+      break;
+    }
+    case 'delete-log': {
+      const pr = byId(id);
+      if(!pr) break;
+      pr.log = (pr.log||[]).filter(l=>l.id!==el.getAttribute('data-log'));
+      persist(); modalProjectDetail(pr);
+      break;
+    }
     case 'rollup-drill': modalRollupDrill(el.getAttribute('data-key'), el.getAttribute('data-area')); break;
 
     case 'add-review-step': modalReviewStep(el.getAttribute('data-kind'), null); break;
@@ -5357,16 +6174,30 @@ function handleAction(action, el){
       break;
     }
 
-    case 'new-project': modalNewProject(); break;
+    case 'new-project': modalNewProject(el.getAttribute('data-kind')); break;
+    // Switching level mid-form rebuilds it: a portfolio has no parent to pick and
+    // no milestones to list, so the form should stop offering them.
+    case 'new-project-kind': {
+      const keep = qs('#np-title') ? qs('#np-title').value : '';
+      modalNewProject(el.value);
+      if(keep && qs('#np-title')) qs('#np-title').value = keep;
+      break;
+    }
     case 'confirm-new-project': {
       const title = qs('#np-title').value.trim();
       const npStart = qs('#np-start').value || null, npDue = qs('#np-due').value || null;
       if(npStart && npDue && npStart > npDue){ pushToast('Start date must be on or before the due date'); break; }
       if(title){
-        const milestones = qs('#np-milestones').value.split('\n').map(x=>x.trim()).filter(Boolean)
-          .map(t=>({id:uid(), title:t, done:false, xpAwarded:false, effort:DEFAULT_EFFORT, doneAt:null}));
+        const box = qs('#np-milestones');
+        const milestones = (box ? box.value : '').split('\n').map(x=>x.trim()).filter(Boolean)
+          .map(t=>({id:uid(), title:t, done:false, xpAwarded:false, effort:DEFAULT_EFFORT, doneAt:null, pct:null}));
+        const kindEl = qs('#np-kind');
+        const parentEl = qs('#np-parent');
         newItem({
           title, type:'project', category:qs('#np-cat').value, priority:qs('#np-pri').value,
+          kind: (kindEl && PROJECT_KINDS[kindEl.value]) ? kindEl.value : 'project',
+          parentId: parentEl ? (parentEl.value || null) : null,
+          weight: 1,
           startDate: npStart,
           dueDate: npDue,
           assignee: qs('#np-assignee').value.trim() || null,
