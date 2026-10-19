@@ -1309,6 +1309,7 @@ const ui = {
   triageSkipped: [],        // ids set aside during this pass through the Inbox
   triageLastCat: null,        // domain last filed to during Process Inbox
   projectFilter: 'all',     // life area filter for Projects view
+  projectKindFilter: 'all', // all | portfolio | program | project
   expandedProjects: new Set(),
   showArchived: false,
   // Inbox filters. Each is a list of chosen values; empty means no restriction.
@@ -2889,6 +2890,7 @@ function renderProcessInbox(){
 function projectViewList(){
   let list = projects();
   if(!ui.showArchived) list = list.filter(p=>inactiveProjects.indexOf(p.id)===-1);
+  if(ui.projectKindFilter!=='all') list = list.filter(p=>(p.kind||'project')===ui.projectKindFilter);
   if(ui.projectFilter!=='all') list = list.filter(p=>p.category===ui.projectFilter);
   if(ui.projectSearch) list = list.filter(p=>matchesSearch(p.title, ui.projectSearch)
     || matchesSearch(p.category, ui.projectSearch)
@@ -2906,6 +2908,13 @@ function renderProjectsView(){
       <button class="btn btn-primary" data-action="new-project">+ New project</button>
       <button class="btn" data-action="new-project" data-kind="program" title="A programme holds projects that share an outcome">+ Programme</button>
       <button class="btn" data-action="new-project" data-kind="portfolio" title="A portfolio holds programmes and projects">+ Portfolio</button>
+    </div>
+    <div class="chip-row" style="align-items:center">
+      <span class="view-sub" style="margin-right:4px">Level:</span>
+      <button class="chip ${ui.projectKindFilter==='all'?'on':''}" data-action="filter-project-kind" data-kind="all">All</button>
+      <button class="chip ${ui.projectKindFilter==='portfolio'?'on':''}" data-action="filter-project-kind" data-kind="portfolio">Portfolios</button>
+      <button class="chip ${ui.projectKindFilter==='program'?'on':''}" data-action="filter-project-kind" data-kind="program">Programs</button>
+      <button class="chip ${ui.projectKindFilter==='project'?'on':''}" data-action="filter-project-kind" data-kind="project">Projects</button>
     </div>
     <div class="chip-row">
       <button class="chip ${ui.projectFilter==='all'?'on':''}" data-action="filter-project" data-cat="all">All domains</button>
@@ -6312,6 +6321,7 @@ function handleAction(action, el){
       render(); break;
     }
     case 'filter-project': ui.projectFilter = el.getAttribute('data-cat'); render(); break;
+    case 'filter-project-kind': ui.projectKindFilter = el.getAttribute('data-kind') || 'all'; render(); break;
     case 'filter-assignee': {
       const a = el.getAttribute('data-assignee');
       if(!a) ui.inboxAssignees = [];                 // "Anyone" clears the whole filter
