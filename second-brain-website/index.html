@@ -1335,6 +1335,8 @@ const ui = {
   historyCustomTo: null,
   historyWeekOffset: 0,       // weeks back from current, for the Reports habit-history pager
   reportsTab: 'areas',        // areas | projects | habits | compare | timeline
+  reportProjectScope: 'active', // all | active — archived projects included only in all mode
+  dashboardProjectScope: 'active', // all | active
   compareGran: 'month',       // week | month | year — granularity of Reports > Compare
   compareBase: -1,            // period offset on the left (0 = the one running now)
   compareVs: 0,               // period offset on the right
@@ -2545,12 +2547,14 @@ function scheduleMidnightRollover(){
 }
 
 function renderLifeDashboard(){
+  const scope = ui.dashboardProjectScope === 'all' ? 'all' : 'active';
   const today = todayISO();
   const now = new Date();
   const weekEnd = new Date(now); weekEnd.setDate(weekEnd.getDate()+7);
   const iso = d => fmtISO(d);
-  const active = items().filter(it => it.status !== 'done' && it.status !== 'archived');
-  const projectItems = projects().filter(p => inactiveProjects.indexOf(p.id)===-1);
+  const inDashboardScope = it => scope==='all' || (it.type==='project' ? inactiveProjects.indexOf(it.id)===-1 : !it.projectId || inactiveProjects.indexOf(it.projectId)===-1);
+  const active = items().filter(it => it.status !== 'done' && it.status !== 'archived' && inDashboardScope(it));
+  const projectItems = projects().filter(p => scope==='all' || inactiveProjects.indexOf(p.id)===-1);
   const actionItems = active.filter(it => it.type === 'task' || it.type === 'milestone');
   const overdue = actionItems.filter(it => it.dueDate && it.dueDate < today)
     .sort((a,b)=>a.dueDate.localeCompare(b.dueDate));
@@ -2575,6 +2579,7 @@ function renderLifeDashboard(){
     '<div class="view-head"><div><div class="view-title">My Life Dashboard</div>' +
     '<div class="view-sub">A calm overview of what needs attention across your life. Counts are based on records you have entered.</div></div>' +
     renderTodayStamp() + '</div>' +
+    '<div class="filter-bar" style="margin:0 0 14px;align-items:center"><span class="view-sub" style="margin:0">Project scope</span><button class="chip '+(scope==='all'?'on':'')+'" data-action="dashboard-project-scope" data-scope="all">All projects</button><button class="chip '+(scope==='active'?'on':'')+'" data-action="dashboard-project-scope" data-scope="active">Unarchived projects only</button></div>' +
     '<div class="capture"><input id="dashboard-capture" aria-label="Quick capture" placeholder="Quick capture — task, idea, reminder…" autocomplete="off" />' +
     '<button class="btn btn-primary" type="button" data-action="dashboard-capture">＋ Capture</button></div>' +
     '<div class="rollup-grid">' +
@@ -3799,6 +3804,7 @@ function renderReportsView(){
       <div><div class="view-title">Reports</div><div class="view-sub">Progress by life area, project, and habit — plus a full completed-tasks timeline.</div></div>
       <button class="btn" data-action="export-report">⇩ Export ${tab==='projects'?'portfolio':tab==='portfolio'?'the tree':tab==='wins'?'your wins':tab==='areas'?'life areas':tab==='habits'?'habits':tab==='compare'?'comparison':'completed work'}</button>
     </div>
+    ${reportScopeControl()}
     <div class="chip-row">
       <button class="chip ${tab==='areas'?'on':''}" data-action="reports-tab" data-tab="areas">Life Areas</button>
       <button class="chip ${tab==='projects'?'on':''}" data-action="reports-tab" data-tab="projects">Projects</button>
@@ -3840,7 +3846,17 @@ function renderReportsAreasView(){
 }
 
 /* Active (non-archived) projects — the book of work the roll-up reports on. */
-function reportProjectList(){ return projects().filter(p=>inactiveProjects.indexOf(p.id)===-1); }
+function reportProjectList(){ return projects().filter(p=>ui.reportProjectScope==='all' || inactiveProjects.indexOf(p.id)===-1); }
+function inReportProjectScope(item){
+  if(ui.reportProjectScope!=='active') return true;
+  if(item.type==='project') return inactiveProjects.indexOf(item.id)===-1;
+  if(item.projectId) return inactiveProjects.indexOf(item.projectId)===-1;
+  return true;
+}
+function reportScopeControl(){
+  const scope=ui.reportProjectScope==='all'?'all':'active';
+  return `<div class="filter-bar" style="margin:0 0 14px;align-items:center"><span class="view-sub" style="margin:0">Project scope</span><button class="chip ${scope==='all'?'on':''}" data-action="report-project-scope" data-scope="all">All projects</button><button class="chip ${scope==='active'?'on':''}" data-action="report-project-scope" data-scope="active">Unarchived projects only</button></div>`;
+}
 function reportProjectRows(){
   const rows = reportProjectList().map(p=>({ p, st:projectStats(p) }));
   const f = ui.projectHealthFilter;
@@ -4017,14 +4033,14 @@ function compareRow(label, a, b, suffix){
    how far through is it, and what is it costing.
    ========================================================= */
 function portfolioRoots(){
-  const all = projects().filter(p=>inactiveProjects.indexOf(p.id)===-1);
+  const all = reportProjectList();
   const ids = new Set(all.map(p=>p.id));
   return all.filter(p=>!p.parentId || !ids.has(p.parentId));
 }
 
 function renderTreeRow(p, depth, share){
   const st = projectStats(p);
-  const kids = childProjects(p).filter(c=>inactiveProjects.indexOf(c.id)===-1);
+  const kids = childProjects(p).filter(c=>reportProjectList().some(x=>x.id===c.id));
   const total = kids.reduce((a,c)=>a+Math.max(0.0001,c.weight||1), 0);
   const bar = st.pct==null ? '' : `<div class="tree-bar"><span style="width:${st.pct}%;background:${HEALTH_BAR_COLOR[st.health]||'#06B6D4'}"></span></div>`;
   return `
@@ -4059,7 +4075,7 @@ function winsData(rangeKey){
   const from = r.from(), to = todayISO();
   const inRange = d => !!d && d.slice(0,10) >= from && d.slice(0,10) <= to;
 
-  const delivered = projects()
+  const delivered = reportProjectList()
     .filter(p=>p.status==='done' && inRange(p.completedAt))
     .sort((a,b)=>String(b.completedAt).localeCompare(String(a.completedAt)))
     .map(p=>{
@@ -4181,7 +4197,7 @@ function renderReportsWinsView(){
 }
 
 function renderReportsPortfolioView(){
-  const all = projects().filter(p=>inactiveProjects.indexOf(p.id)===-1);
+  const all = reportProjectList();
   const leaves = all.filter(p=>!isContainerKind(p) && p.status!=='done');
   const roots = portfolioRoots();
   const count = k => all.filter(p=>(p.kind||'project')===k).length;
@@ -4355,7 +4371,7 @@ function renderReportsCompareView(){
 }
 
 function renderReportsTimelineView(){
-  const all = completedItems();
+  const all = completedItems().filter(inReportProjectScope);
   const filtered = all.filter(inHistoryRange).sort((a,b)=>b.completedAt.localeCompare(a.completedAt));
   const rangeLabel = {month:'this month', '30d':'in the last 30 days', all:'yet', custom:'in this range'}[ui.historyRange] || '';
   const bragDomains = doneDomains();
@@ -5828,7 +5844,7 @@ function periodStats(from, to, domain){
   const inDomain = c => !domain || domain==='all' || c===domain;
   const weight = u => (EFFORT[u.effort]||EFFORT[DEFAULT_EFFORT]).weight;
 
-  const doneItems = completedItems().filter(i=>inRange(i.completedAt) && inDomain(i.category));
+  const doneItems = completedItems().filter(i=>inRange(i.completedAt) && inDomain(i.category) && inReportProjectScope(i));
   const projectsDone = doneItems.filter(i=>i.type==='project');
   const tasksDone    = doneItems.filter(i=>i.type==='task');
 
@@ -5837,7 +5853,7 @@ function periodStats(from, to, domain){
      claim, and listing it again under "moved forward" reads as padding. */
   const deliveredIds = new Set(projectsDone.map(p=>p.id));
   const advanced = [];
-  projects().filter(p=>inDomain(p.category) && !deliveredIds.has(p.id)).forEach(p=>{
+  reportProjectList().filter(p=>inDomain(p.category) && !deliveredIds.has(p.id)).forEach(p=>{
     const closed = (p.subtasks||[]).filter(sx=>sx.done && inRange(sx.doneAt));
     if(closed.length) advanced.push({ project:p, closed, st:projectStats(p) });
   });
@@ -6475,6 +6491,8 @@ function handleAction(action, el){
       render(); break;
     }
     case 'reports-tab': ui.reportsTab = el.getAttribute('data-tab'); render(); break;
+    case 'report-project-scope': ui.reportProjectScope = el.getAttribute('data-scope')==='all'?'all':'active'; render(); break;
+    case 'dashboard-project-scope': ui.dashboardProjectScope = el.getAttribute('data-scope')==='all'?'all':'active'; render(); break;
     case 'wins-range': ui.winsRange = el.getAttribute('data-range'); render(); break;
     case 'review-tab': ui.reviewTab = el.getAttribute('data-tab'); render(); break;
     case 'review-tick': {
