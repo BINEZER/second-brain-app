@@ -211,16 +211,10 @@
       .rollup-tile .drill{font-size:10px;font-weight:700;color:var(--c-text-muted);margin-top:6px;opacity:.75}
       .rollup-tile .v{font-family:'JetBrains Mono',monospace;font-size:21px;font-weight:700;color:var(--c-text);line-height:1.1}
       .rollup-tile .k{font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--c-text-muted);margin-top:5px}
-      .dashboard-charts{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),1fr));gap:14px;margin:0 0 16px}
-      .dashboard-chart-card{min-width:0;min-height:285px;position:relative;overflow:hidden}
-      .dashboard-chart-card .pipeline-head{align-items:flex-start}
-      .dashboard-chart-card canvas{width:100%!important;height:220px!important;max-height:220px}
-      .dashboard-chart-sub{font-size:12px;color:var(--c-text-muted);margin:-4px 0 12px}
       .rollup-tile:nth-child(4n+1){border-top:3px solid #6366F1}
       .rollup-tile:nth-child(4n+2){border-top:3px solid #F43F5E}
       .rollup-tile:nth-child(4n+3){border-top:3px solid #0EA5E9}
       .rollup-tile:nth-child(4n+4){border-top:3px solid #F59E0B}
-      @media(max-width:600px){.dashboard-chart-card{min-height:260px;padding:14px}.dashboard-chart-card canvas{height:195px!important;max-height:195px}}
       /* Drag to reorder. touch-action:none on the handle stops the browser
          scrolling the page instead of letting the pointer drag the row. */
       /* Review-step tools stay out of the way until the row is hovered, so the
@@ -2555,21 +2549,9 @@ function renderLifeDashboard(){
   const blocked = active.filter(it => it.status === 'blocked' || it.blocked === true || !!it.blockedReason);
   const focus = focusList();
   const finished = completedItems().filter(it=>it.completedAt.slice(0,10)>=fmtISO(addDays(new Date(),-6)));
-  const lifeAreas = state.state.lifeAreas || [];
-  const areaNames = ['Inbox', ...lifeAreas.map(a=>a.name)];
-  const areaLoad = areaNames.map(name=>({name,count:active.filter(it=>it.category===name).length}))
-    .filter(x=>x.count>0).sort((a,b)=>b.count-a.count);
   const attention = projectItems.map(p=>({p,st:projectStats(p)}))
     .filter(x=>x.st && ['overdue','behind','risk','stalled','noplan'].includes(x.st.health))
     .sort((a,b)=>HEALTH_ORDER.indexOf(a.st.health)-HEALTH_ORDER.indexOf(b.st.health)).slice(0,5);
-  const levelCounts = ['portfolio','program','project'].map(kind => ({kind,label:PROJECT_KINDS[kind].label,
-    count:projectItems.filter(it => (it.kind || 'project') === kind).length}));
-  const actionStatusCounts = [
-    {label:'Overdue',count:actionItems.filter(it=>it.dueDate&&it.dueDate<today).length,detail:'Past their due date'},
-    {label:'Due in 7 days',count:actionItems.filter(it=>it.dueDate&&it.dueDate>=today&&it.dueDate<=iso(weekEnd)).length,detail:'Need attention soon'},
-    {label:'Blocked / waiting',count:blocked.filter(it=>it.type==='task'||it.type==='milestone').length,detail:'Waiting on something or someone'},
-    {label:'No due date',count:actionItems.filter(it=>!it.dueDate).length,detail:'Could use a realistic deadline'}
-  ];
   const esc = value => String(value == null ? '' : value).replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
   const dateLabel = value => value ? new Date(value+'T12:00:00').toLocaleDateString(undefined,{month:'short',day:'numeric'}) : 'No due date';
   const rows = (arr, empty, action) => arr.length ? arr.slice(0,5).map(it =>
@@ -2590,15 +2572,6 @@ function renderLifeDashboard(){
     metric(overdue.length,'Overdue actions','Tasks and milestones past due','inbox') +
     metric(focus.length,'Current focus','Pinned priorities · aim for 1–3','now') +
     metric(blocked.length,'Blocked items','Items marked as blocked or waiting','projects') + '</div>' +
-    chartMissingNote() +
-    '<div class="dashboard-charts">' +
-    '<section class="card dashboard-chart-card"><div class="pipeline-head"><div><div class="pipeline-title">Open commitments by life area</div><div class="dashboard-chart-sub">Open items, not measured hours</div></div><button class="btn btn-sm" data-action="nav" data-view="portfolio-review">Assess areas</button></div><canvas id="chart-dashboard-areas" aria-label="Open commitments by life area chart"></canvas>' +
-    (areaLoad.length?areaLoad.slice(0,5).map(x=>'<button class="pipeline-row" style="width:100%;text-align:left" data-action="nav" data-view="portfolio-review"><span class="item-main">'+esc(x.name)+'</span><span class="chip">'+x.count+' open</span></button>').join(''):'<div class="view-sub">No open items are assigned to a life area yet. Review whether your life areas are set up and items are categorized.</div>') + '</section>' +
-    '<section class="card dashboard-chart-card"><div class="pipeline-head"><div><div class="pipeline-title">Portfolio structure</div><div class="dashboard-chart-sub">Active portfolios, programmes and projects</div></div><button class="btn btn-sm" data-action="nav" data-view="projects">Review projects</button></div><canvas id="chart-dashboard-levels" aria-label="Portfolio structure chart"></canvas>' +
-    levelCounts.map(x=>'<button class="pipeline-row" style="width:100%;text-align:left" data-action="nav" data-view="projects"><span class="item-main">'+esc(x.label)+'</span><span class="chip">'+x.count+'</span></button>').join('') + '</section>' +
-    '<section class="card dashboard-chart-card"><div class="pipeline-head"><div><div class="pipeline-title">Action status</div><div class="dashboard-chart-sub">Due-date and blocker snapshot</div></div><button class="btn btn-sm" data-action="nav" data-view="inbox">Review actions</button></div><canvas id="chart-dashboard-actions" aria-label="Action status chart"></canvas>' +
-    actionStatusCounts.map(x=>'<button class="pipeline-row" style="width:100%;text-align:left" data-action="nav" data-view="inbox"><span class="item-main"><b>'+esc(x.label)+'</b><span class="item-meta">'+esc(x.detail)+'</span></span><span class="chip">'+x.count+'</span></button>').join('') + '</section>' +
-    '</div>' +
     '<div class="grid-two" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr));gap:14px;margin-bottom:14px">' +
     '<section class="card"><div class="pipeline-head"><div class="pipeline-title">Today’s focus</div><a class="btn btn-sm" href="#" data-action="nav" data-view="now">Open Now</a></div>' +
     (focus.length ? focus.slice(0,3).map((it,i) => '<div class="focus-card" style="margin:8px 0"><div class="focus-num">'+(i+1)+'</div><div><div class="focus-title">'+esc(it.title)+'</div><div class="item-meta">'+esc(it.category || 'Unfiled')+'</div></div></div>').join('') :
@@ -2616,12 +2589,6 @@ function renderLifeDashboard(){
     '<section class="card"><div class="pipeline-head"><div class="pipeline-title">This week’s outcomes</div><a class="btn btn-sm" href="#" data-action="nav" data-view="review">Weekly review</a></div>' +
     '<div class="view-sub">Choose the outcomes you want to finish this week during your review. Recently completed: '+finished.length+' item'+(finished.length===1?'':'s')+' in the last 7 days.</div>' +
     '<div class="view-sub" style="margin-top:8px">Weekly outcomes are not yet stored as a separate planning record.</div></section></div>' +
-    '<section class="card"><div class="pipeline-head"><div class="pipeline-title">Portfolio balance</div><a class="btn btn-sm" href="#" data-action="nav" data-view="projects">Manage</a></div>' +
-    '<div class="rollup-grid" style="margin:0">' + levelCounts.map(x => '<div class="rollup-tile"><div class="v">'+x.count+'</div><div class="k">'+x.label+'s</div></div>').join('') + '</div>' +
-    '<div class="view-sub" style="margin-top:12px">Open commitments by life area (a workload proxy, not measured hours):</div>' +
-    (areaLoad.length ? areaLoad.map(x=>'<div class="pipeline-row"><div class="item-main">'+esc(x.name)+'</div><span class="chip">'+x.count+' open</span></div>').join('') :
-    '<div class="view-sub" style="padding:8px 0">No active commitments assigned to life areas yet.</div>') +
-    '<div class="view-sub" style="margin-top:10px">Time and money capacity cannot be assessed until available hours and budgets are recorded.</div></section>' +
     '<div class="grid-two" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr));gap:14px;margin-top:14px">' +
     reviewCard('Weekly Review',[
       'What did I finish?',
