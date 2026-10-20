@@ -2493,6 +2493,8 @@ function renderView(){
   if(ui.processInbox) return renderProcessInbox();
   switch(ui.view){
     case 'dashboard': return renderLifeDashboard();
+    case 'weekly-review': return renderWeeklyReview();
+    case 'portfolio-review': return renderPortfolioReview();
     case 'inbox': return renderInboxView();
     case 'projects': return renderProjectsView();
     case 'binder': return renderBinderView();
@@ -2547,7 +2549,7 @@ function renderLifeDashboard(){
   const areaNames = ['Inbox', ...lifeAreas.map(a=>a.name)];
   const areaLoad = areaNames.map(name=>({name,count:active.filter(it=>it.category===name).length}))
     .filter(x=>x.count>0).sort((a,b)=>b.count-a.count);
-  const attention = projectItems.map(p=>({p,st:projectStats(p.id)}))
+  const attention = projectItems.map(p=>({p,st:projectStats(p)}))
     .filter(x=>x.st && ['overdue','behind','risk','stalled','noplan'].includes(x.st.health))
     .sort((a,b)=>HEALTH_ORDER.indexOf(a.st.health)-HEALTH_ORDER.indexOf(b.st.health)).slice(0,5);
   const levelCounts = ['portfolio','program','project'].map(kind => ({kind,label:PROJECT_KINDS[kind].label,
@@ -2611,6 +2613,41 @@ function renderLifeDashboard(){
       'What should receive more or less attention next month?'
     ],'reports','Review portfolio') +
     '</div></div>';
+}
+
+function renderWeeklyReview(){
+  const today = todayISO();
+  const weekAgo = fmtISO(addDays(new Date(),-6));
+  const done = completedItems().filter(it=>it.completedAt.slice(0,10)>=weekAgo && it.completedAt.slice(0,10)<=today);
+  const overdue = items().filter(it=>(it.type==='task'||it.type==='milestone') && it.status!=='done' && it.status!=='archived' && it.dueDate && it.dueDate<today);
+  const blocked = items().filter(it=>it.status!=='done' && it.status!=='archived' && (it.status==='blocked'||it.blocked===true||!!it.blockedReason));
+  const activeProjects = projects().filter(p=>inactiveProjects.indexOf(p.id)===-1 && p.status!=='done' && p.status!=='archived');
+  const esc = value => String(value == null ? '' : value).replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+  const panel = (title,body) => '<section class="card" style="margin-bottom:14px"><div class="pipeline-title">'+title+'</div>'+body+'</section>';
+  return '<div class="view"><div class="view-head"><div><div class="view-title">Weekly Review</div><div class="view-sub">Review reality first, then decide what deserves your attention next.</div></div><button class="btn" data-action="nav" data-view="dashboard">← Dashboard</button></div>' +
+    panel('1. What did I finish?','<div class="view-sub">'+done.length+' completed item'+(done.length===1?'':'s')+' in the last seven days.</div>'+(done.length?done.slice(0,8).map(it=>'<div class="pipeline-row"><div class="item-main">'+esc(it.title)+'<div class="item-meta">'+esc(it.category||'Unfiled')+'</div></div></div>').join(''):'<div class="view-sub" style="padding-top:8px">No completed items recorded in this window.</div>')) +
+    panel('2. What is blocked or overdue?','<div class="view-sub">'+blocked.length+' blocked/waiting · '+overdue.length+' overdue actions.</div>'+(blocked.concat(overdue.filter(it=>!blocked.some(b=>b.id===it.id))).slice(0,10).map(it=>'<div class="pipeline-row"><div class="item-main">'+esc(it.title)+'<div class="item-meta">'+esc(it.category||'Unfiled')+(it.dueDate?' · due '+esc(it.dueDate):'')+'</div></div></div>').join('')||'<div class="view-sub" style="padding-top:8px">Nothing currently flagged.</div>')) +
+    panel('3. What deserves attention this week?','<div class="view-sub">Choose your one to three current priorities in Now. Keep the week realistic.</div><button class="btn btn-primary" data-action="nav" data-view="now">Choose current focus</button>') +
+    panel('4. What can I pause, delegate, defer or drop?','<ul style="padding-left:20px"><li>Which active commitment no longer supports an important outcome?</li><li>What can someone else own?</li><li>What can safely wait until next week or next month?</li></ul>') +
+    panel('5. Is my workload aligned with my priorities?','<div class="view-sub">Open commitments are counted by life area on the dashboard. This is a task-count proxy, not a measurement of effort or available capacity.</div><button class="btn" data-action="nav" data-view="dashboard">Review workload by area</button>') +
+    panel('6. What is the next action for each active project?','<div class="view-sub">Review the next open milestone or task under each project. Projects with no clear next step should be clarified, paused or archived.</div>'+(activeProjects.length?activeProjects.slice(0,30).map(p=>{const next=(p.subtasks||[]).find(st=>!st.done);return '<div class="pipeline-row"><div class="item-main"><b>'+esc(p.title)+'</b><div class="item-meta">'+esc(next?next.title:'No open milestone recorded — define the next action')+'</div></div><button class="btn btn-sm" data-action="dashboard-open-item" data-id="'+esc(p.id)+'">Open</button></div>';}).join(''):'<div class="view-sub" style="padding-top:8px">No active projects.</div>')) +
+    '<div class="view-sub">This page assembles a review from live records; it does not automatically change priorities or commitments.</div></div>';
+}
+
+function renderPortfolioReview(){
+  const active = items().filter(it=>it.status!=='done' && it.status!=='archived');
+  const projectsActive = projects().filter(p=>inactiveProjects.indexOf(p.id)===-1 && p.status!=='done' && p.status!=='archived');
+  const areas = state.state.lifeAreas || [];
+  const esc = value => String(value == null ? '' : value).replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+  const areaRows = ['Inbox',...areas.map(a=>a.name)].map(name=>({name,items:active.filter(it=>it.category===name),projects:projectsActive.filter(p=>p.category===name)}));
+  return '<div class="view"><div class="view-head"><div><div class="view-title">Portfolio Review</div><div class="view-sub">Check whether your commitments still deserve the time, money and attention they require.</div></div><button class="btn" data-action="nav" data-view="dashboard">← Dashboard</button></div>' +
+    '<div class="rollup-grid"><div class="rollup-tile"><div class="v">'+projectsActive.length+'</div><div class="k">Active portfolio items</div></div><div class="rollup-tile"><div class="v">'+active.length+'</div><div class="k">Open commitments</div></div><div class="rollup-tile"><div class="v">'+areas.filter(a=>areaRows.find(x=>x.name===a.name).items.length===0).length+'</div><div class="k">Life areas with no open items</div></div></div>' +
+    '<section class="card" style="margin:14px 0"><div class="pipeline-title">1. Which areas of life are being neglected?</div><div class="view-sub" style="margin:8px 0">Open-item counts show recorded commitments only. Zero items does not prove an area is neglected or well cared for.</div>' +
+    areaRows.map(x=>'<div class="pipeline-row"><div class="item-main"><b>'+esc(x.name)+'</b><div class="item-meta">'+x.projects.length+' active portfolio item'+(x.projects.length===1?'':'s')+'</div></div><span class="chip">'+x.items.length+' open</span></div>').join('')+'</section>' +
+    '<section class="card" style="margin-bottom:14px"><div class="pipeline-title">2. Which programmes and projects justify continued effort?</div><div class="view-sub" style="margin:8px 0">Use health, value, strategic fit, and cost to decide whether to continue, reshape, pause or stop. The app cannot infer business or personal value from task counts alone.</div>' +
+    (projectsActive.length?projectsActive.map(p=>{const st=projectStats(p);return '<div class="pipeline-row"><div class="item-main"><b>'+esc(p.title)+'</b><div class="item-meta">'+esc(p.category||'Unfiled')+' · '+esc(HEALTH_META[st.health]?.label||st.health)+'</div></div><button class="btn btn-sm" data-action="dashboard-open-item" data-id="'+esc(p.id)+'">Review</button></div>';}).join(''):'<div class="view-sub">No active projects.</div>')+'</section>' +
+    '<section class="card" style="margin-bottom:14px"><div class="pipeline-title">3. Are commitments exceeding available time or money?</div><div class="view-sub" style="margin:8px 0">Not enough data to assess capacity: available hours, estimated effort and committed budgets are not consistently recorded as comparable portfolio-wide values.</div><ul style="padding-left:20px"><li>Estimate the hours you realistically have next month.</li><li>List known costs and the budget you can safely commit.</li><li>Compare those limits with the projects you intend to continue.</li></ul></section>' +
+    '<section class="card"><div class="pipeline-title">4. What should receive more or less attention next month?</div><ul style="padding-left:20px"><li>Increase attention for work with high value and a clear next step.</li><li>Reduce or pause low-value work that consumes scarce time or money.</li><li>Keep room for family, health, faith, rest and unplanned obligations.</li></ul><div class="view-sub">These are review prompts, not a saved allocation plan. Record decisions in your project records after reviewing.</div></section></div>';
 }
 
 function renderNowView(){
