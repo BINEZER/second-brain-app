@@ -211,6 +211,16 @@
       .rollup-tile .drill{font-size:10px;font-weight:700;color:var(--c-text-muted);margin-top:6px;opacity:.75}
       .rollup-tile .v{font-family:'JetBrains Mono',monospace;font-size:21px;font-weight:700;color:var(--c-text);line-height:1.1}
       .rollup-tile .k{font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--c-text-muted);margin-top:5px}
+      .dashboard-charts{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),1fr));gap:14px;margin:0 0 16px}
+      .dashboard-chart-card{min-width:0;min-height:285px;position:relative;overflow:hidden}
+      .dashboard-chart-card .pipeline-head{align-items:flex-start}
+      .dashboard-chart-card canvas{width:100%!important;height:220px!important;max-height:220px}
+      .dashboard-chart-sub{font-size:12px;color:var(--c-text-muted);margin:-4px 0 12px}
+      .rollup-tile:nth-child(4n+1){border-top:3px solid #6366F1}
+      .rollup-tile:nth-child(4n+2){border-top:3px solid #F43F5E}
+      .rollup-tile:nth-child(4n+3){border-top:3px solid #0EA5E9}
+      .rollup-tile:nth-child(4n+4){border-top:3px solid #F59E0B}
+      @media(max-width:600px){.dashboard-chart-card{min-height:260px;padding:14px}.dashboard-chart-card canvas{height:195px!important;max-height:195px}}
       /* Drag to reorder. touch-action:none on the handle stops the browser
          scrolling the page instead of letting the pointer drag the row. */
       /* Review-step tools stay out of the way until the row is hovered, so the
@@ -1300,7 +1310,7 @@ function pushToast(msg, big){
    UI (non-persisted) state
    ========================================================= */
 const ui = {
-  view: 'now',              // now | inbox | projects | habits | followups
+  view: 'dashboard',        // Start with the life overview; Now / Today remains one click away
   sidebarCollapsed: false,   // desktop: collapse the sidebar to an icon rail
   navOpen: false,            // phone: the nav drawer is slid in over the page
   processInbox: false,
@@ -2423,9 +2433,9 @@ function renderSidebar(){
       <button class="sb-toggle" data-action="toggle-sidebar" title="Toggle sidebar">${collapsed?'»':'«'}</button>
       <button class="sb-close" data-action="close-nav" title="Close menu" aria-label="Close menu">✕</button>
     </div>
+    ${navItem('dashboard', icon('reports'), 'My Life Dashboard')}
     ${navItem('inbox', icon('inbox'), 'Inbox', inboxCount||'')}
     ${navItem('now', icon('now'), 'Now / Today')}
-    ${navItem('dashboard', icon('reports'), 'My Life Dashboard')}
     ${navItem('projects', icon('projects'), 'Projects')}
     ${navItem('binder', icon('binder'), 'Life Binder')}
     ${navItem('habits', icon('habit'), 'Habits')}
@@ -2574,7 +2584,13 @@ function renderLifeDashboard(){
     metric(overdue.length,'Overdue actions','Tasks and milestones past due','inbox') +
     metric(focus.length,'Current focus','Pinned priorities · aim for 1–3','now') +
     metric(blocked.length,'Blocked items','Items marked as blocked or waiting','projects') + '</div>' +
-    '<div class="grid-two" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr));gap:14px;margin-bottom:14px">' +
+    chartMissingNote() +
+    '<div class="dashboard-charts">' +
+    '<section class="card dashboard-chart-card"><div class="pipeline-head"><div><div class="pipeline-title">Open commitments by life area</div><div class="dashboard-chart-sub">Open items, not measured hours</div></div><span class="chip">'+active.length+'</span></div><canvas id="chart-dashboard-areas" aria-label="Open commitments by life area chart"></canvas></section>' +
+    '<section class="card dashboard-chart-card"><div class="pipeline-head"><div><div class="pipeline-title">Portfolio structure</div><div class="dashboard-chart-sub">Active portfolios, programmes and projects</div></div><span class="chip">'+projectItems.length+'</span></div><canvas id="chart-dashboard-levels" aria-label="Portfolio structure chart"></canvas></section>' +
+    '<section class="card dashboard-chart-card"><div class="pipeline-head"><div><div class="pipeline-title">Action status</div><div class="dashboard-chart-sub">Due-date and blocker snapshot</div></div><span class="chip">'+actionItems.length+' actions</span></div><canvas id="chart-dashboard-actions" aria-label="Action status chart"></canvas></section>' +
+    '</div>' +
+    '<div class="grid-two" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr));gap:14px;margin-bottom:14px">'
     '<section class="card"><div class="pipeline-head"><div class="pipeline-title">Today’s focus</div><a class="btn btn-sm" href="#" data-action="nav" data-view="now">Open Now</a></div>' +
     (focus.length ? focus.slice(0,3).map((it,i) => '<div class="focus-card" style="margin:8px 0"><div class="focus-num">'+(i+1)+'</div><div><div class="focus-title">'+esc(it.title)+'</div><div class="item-meta">'+esc(it.category || 'Unfiled')+'</div></div></div>').join('') :
     '<div class="view-sub" style="padding:12px 0">Nothing pinned yet. Choose one to three priorities for today.</div>') + '</section>' +
@@ -3600,6 +3616,32 @@ function renderCharts(){
   destroyCharts();
   if(typeof Chart==='undefined') return;
 
+  const dashboardAreasCanvas = document.getElementById('chart-dashboard-areas');
+  if(dashboardAreasCanvas){
+    const openItems = items().filter(it=>it.status!=='done' && it.status!=='archived');
+    const areaNames = ['Inbox', ...(state.state.lifeAreas||[]).map(a=>a.name)];
+    const rows = areaNames.map(name=>({name:name,count:openItems.filter(it=>it.category===name).length})).filter(x=>x.count>0).sort((a,b)=>b.count-a.count).slice(0,8);
+    const palette = ['#6366F1','#0EA5E9','#14B8A6','#F59E0B','#F43F5E','#8B5CF6','#84CC16','#64748B'];
+    charts.dashboardAreas = new Chart(dashboardAreasCanvas,{type:'bar',data:{labels:rows.map(x=>x.name),datasets:[{label:'Open items',data:rows.map(x=>x.count),backgroundColor:rows.map((x,i)=>palette[i%palette.length]),borderRadius:6,maxBarThickness:22}]},options:Object.assign(barChartOptions(true),{plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>String(c.raw)+' open item'+(c.raw===1?'':'s')}}}})});
+  }
+  const dashboardLevelsCanvas = document.getElementById('chart-dashboard-levels');
+  if(dashboardLevelsCanvas){
+    const activeProjects = projects().filter(p=>inactiveProjects.indexOf(p.id)===-1);
+    const levels = ['portfolio','program','project'].map(kind=>({label:PROJECT_KINDS[kind].label,count:activeProjects.filter(p=>(p.kind||'project')===kind).length}));
+    charts.dashboardLevels = new Chart(dashboardLevelsCanvas,{type:'doughnut',data:{labels:levels.map(x=>x.label),datasets:[{data:levels.map(x=>x.count),backgroundColor:['#6366F1','#0EA5E9','#14B8A6'],borderColor:getComputedStyle(document.documentElement).getPropertyValue('--c-surface').trim()||'#FFFFFF',borderWidth:3,hoverOffset:5}]},options:{responsive:true,maintainAspectRatio:false,cutout:'64%',plugins:{legend:{position:'bottom',labels:{color:getComputedStyle(document.documentElement).getPropertyValue('--c-text-secondary').trim()||'#475569',usePointStyle:true,pointStyle:'circle',padding:16}}}}});
+  }
+  const dashboardActionsCanvas = document.getElementById('chart-dashboard-actions');
+  if(dashboardActionsCanvas){
+    const today = todayISO();
+    const activeActions = items().filter(it=>(it.type==='task'||it.type==='milestone')&&it.status!=='done'&&it.status!=='archived');
+    const counts = [
+      {label:'Overdue',count:activeActions.filter(it=>it.dueDate&&it.dueDate<today).length},
+      {label:'Due in 7 days',count:activeActions.filter(it=>it.dueDate&&it.dueDate>=today&&it.dueDate<=fmtISO(addDays(new Date(),7))).length},
+      {label:'Blocked / waiting',count:activeActions.filter(it=>it.status==='blocked'||it.blocked===true||!!it.blockedReason).length},
+      {label:'No due date',count:activeActions.filter(it=>!it.dueDate).length}
+    ];
+    charts.dashboardActions = new Chart(dashboardActionsCanvas,{type:'doughnut',data:{labels:counts.map(x=>x.label),datasets:[{data:counts.map(x=>x.count),backgroundColor:['#F43F5E','#0EA5E9','#F59E0B','#94A3B8'],borderColor:getComputedStyle(document.documentElement).getPropertyValue('--c-surface').trim()||'#FFFFFF',borderWidth:3,hoverOffset:5}]},options:{responsive:true,maintainAspectRatio:false,cutout:'60%',plugins:{legend:{position:'bottom',labels:{color:getComputedStyle(document.documentElement).getPropertyValue('--c-text-secondary').trim()||'#475569',usePointStyle:true,pointStyle:'circle',padding:14}}}}});
+  }
   const areasCanvas = document.getElementById('chart-areas');
   if(areasCanvas){
     const areas = state.state.lifeAreas;
@@ -7034,7 +7076,17 @@ function handleAction(action, el){
     }
     case 'dashboard-open-item': {
       const target = byId(id);
-      if(target){ ui.view = target.type==='project' ? 'projects' : 'inbox'; ui.processInbox=false; }
+      if(target){
+        ui.processInbox = false;
+        if(target.type === 'project'){
+          ui.view = 'projects'; ui.projectFilter = 'all'; ui.projectKindFilter = 'all';
+          ui.expandedProjects.add(target.id);
+        } else {
+          ui.view = 'inbox'; ui.inboxScope = 'all'; ui.inboxSearch = target.title || '';
+          ui.inboxAssignees = []; ui.inboxProjects = []; ui.inboxCategories = []; ui.inboxDates = [];
+        }
+        render();
+      } else pushToast('This item could not be found. It may have been archived or deleted.');
       break;
     }
     case 'new-project': modalNewProject(el.getAttribute('data-kind')); break;
