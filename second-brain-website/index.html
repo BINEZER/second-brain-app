@@ -2556,9 +2556,9 @@ function renderLifeDashboard(){
     '<div class="view-head"><div><div class="view-title">My Life Dashboard</div>' +
     '<div class="view-sub">One calm overview of what needs attention across your life.</div></div>' +
     renderTodayStamp() + '</div>' +
-    '<form class="capture" data-action="dashboard-capture-form">' +
+    '<div class="capture">' +
     '<input id="dashboard-capture" aria-label="Quick capture" placeholder="Quick capture — task, idea, reminder…" autocomplete="off" />' +
-    '<button class="btn btn-primary" type="submit">＋ Capture</button></form>' +
+    '<button class="btn btn-primary" type="button" data-action="dashboard-capture">＋ Capture</button></div>' +
     '<div class="rollup-grid">' +
     metric(projectItems.length,'Active projects','Portfolios, programmes and projects','projects') +
     metric(overdue.length,'Overdue actions','Needs a decision or next step','inbox') +
@@ -6955,10 +6955,10 @@ function handleAction(action, el){
       break;
     }
 
-    case 'dashboard-capture-form': {
+    case 'dashboard-capture': {
       const input = qs('#dashboard-capture');
       const title = input && input.value.trim();
-      if(title){ newItem({title, type:'task', category:'Inbox'}); ui.view='dashboard'; persist(); }
+      if(title){ newItem({title, type:'task', category:'Inbox'}); input.value=''; ui.view='dashboard'; persist(); pushToast('Captured to Inbox'); }
       break;
     }
     case 'dashboard-open-item': {
