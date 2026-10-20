@@ -1300,7 +1300,7 @@ function pushToast(msg, big){
    UI (non-persisted) state
    ========================================================= */
 const ui = {
-  view: 'now',              // now | inbox | projects | habits | followups
+  view: 'dashboard',        // Start with the life overview; Now / Today remains one click away
   sidebarCollapsed: false,   // desktop: collapse the sidebar to an icon rail
   navOpen: false,            // phone: the nav drawer is slid in over the page
   processInbox: false,
@@ -2423,9 +2423,9 @@ function renderSidebar(){
       <button class="sb-toggle" data-action="toggle-sidebar" title="Toggle sidebar">${collapsed?'»':'«'}</button>
       <button class="sb-close" data-action="close-nav" title="Close menu" aria-label="Close menu">✕</button>
     </div>
+    ${navItem('dashboard', icon('reports'), 'My Life Dashboard')}
     ${navItem('inbox', icon('inbox'), 'Inbox', inboxCount||'')}
     ${navItem('now', icon('now'), 'Now / Today')}
-    ${navItem('dashboard', icon('reports'), 'My Life Dashboard')}
     ${navItem('projects', icon('projects'), 'Projects')}
     ${navItem('binder', icon('binder'), 'Life Binder')}
     ${navItem('habits', icon('habit'), 'Habits')}
@@ -7034,7 +7034,17 @@ function handleAction(action, el){
     }
     case 'dashboard-open-item': {
       const target = byId(id);
-      if(target){ ui.view = target.type==='project' ? 'projects' : 'inbox'; ui.processInbox=false; }
+      if(target){
+        ui.processInbox = false;
+        if(target.type === 'project'){
+          ui.view = 'projects'; ui.projectFilter = 'all'; ui.projectKindFilter = 'all';
+          ui.expandedProjects.add(target.id);
+        } else {
+          ui.view = 'inbox'; ui.inboxScope = 'all'; ui.inboxSearch = target.title || '';
+          ui.inboxAssignees = []; ui.inboxProjects = []; ui.inboxCategories = []; ui.inboxDates = [];
+        }
+        render();
+      } else pushToast('This item could not be found. It may have been archived or deleted.');
       break;
     }
     case 'new-project': modalNewProject(el.getAttribute('data-kind')); break;
