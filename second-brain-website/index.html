@@ -2534,15 +2534,23 @@ function renderLifeDashboard(){
   const weekEnd = new Date(now); weekEnd.setDate(weekEnd.getDate()+7);
   const iso = d => fmtISO(d);
   const active = items().filter(it => it.status !== 'done' && it.status !== 'archived');
-  const projectItems = active.filter(it => it.type === 'project');
+  const projectItems = projects().filter(p => inactiveProjects.indexOf(p.id)===-1);
   const actionItems = active.filter(it => it.type === 'task' || it.type === 'milestone');
-  const overdue = actionItems.filter(it => it.dueDate && it.dueDate < today);
+  const overdue = actionItems.filter(it => it.dueDate && it.dueDate < today)
+    .sort((a,b)=>a.dueDate.localeCompare(b.dueDate));
   const dueSoon = actionItems.filter(it => it.dueDate && it.dueDate >= today && it.dueDate <= iso(weekEnd))
     .sort((a,b) => a.dueDate.localeCompare(b.dueDate));
   const blocked = active.filter(it => it.status === 'blocked' || it.blocked === true || !!it.blockedReason);
   const focus = focusList();
-  const kinds = ['portfolio','program','project'];
-  const levelCounts = kinds.map(kind => ({kind, label:PROJECT_KINDS[kind].label,
+  const finished = completedItems().filter(it=>it.completedAt.slice(0,10)>=fmtISO(addDays(new Date(),-6)));
+  const lifeAreas = state.state.lifeAreas || [];
+  const areaNames = ['Inbox', ...lifeAreas.map(a=>a.name)];
+  const areaLoad = areaNames.map(name=>({name,count:active.filter(it=>it.category===name).length}))
+    .filter(x=>x.count>0).sort((a,b)=>b.count-a.count);
+  const attention = projectItems.map(p=>({p,st:projectStats(p.id)}))
+    .filter(x=>x.st && ['overdue','behind','risk','stalled','noplan'].includes(x.st.health))
+    .sort((a,b)=>HEALTH_ORDER.indexOf(a.st.health)-HEALTH_ORDER.indexOf(b.st.health)).slice(0,5);
+  const levelCounts = ['portfolio','program','project'].map(kind => ({kind,label:PROJECT_KINDS[kind].label,
     count:projectItems.filter(it => (it.kind || 'project') === kind).length}));
   const esc = value => String(value == null ? '' : value).replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
   const dateLabel = value => value ? new Date(value+'T12:00:00').toLocaleDateString(undefined,{month:'short',day:'numeric'}) : 'No due date';
@@ -2552,31 +2560,57 @@ function renderLifeDashboard(){
     '<span aria-hidden="true">›</span></button>').join('') : '<div class="view-sub" style="padding:12px 0">'+empty+'</div>';
   const metric = (value,label,detail,view) => '<button class="rollup-tile" data-action="nav" data-view="'+view+'">' +
     '<div class="v">'+value+'</div><div class="k">'+label+'</div><div class="drill">'+detail+'</div></button>';
+  const reviewCard = (title,questions,view,label) => '<section class="card"><div class="pipeline-head"><div class="pipeline-title">'+title+'</div><a class="btn btn-sm" href="#" data-action="nav" data-view="'+view+'">'+label+'</a></div><ul style="padding-left:20px;margin:8px 0 0">'+questions.map(q=>'<li style="margin:7px 0">'+q+'</li>').join('')+'</ul></section>';
   return '<div class="view">' +
     '<div class="view-head"><div><div class="view-title">My Life Dashboard</div>' +
-    '<div class="view-sub">One calm overview of what needs attention across your life.</div></div>' +
+    '<div class="view-sub">A calm overview of what needs attention across your life. Counts are based on records you have entered.</div></div>' +
     renderTodayStamp() + '</div>' +
-    '<div class="capture">' +
-    '<input id="dashboard-capture" aria-label="Quick capture" placeholder="Quick capture — task, idea, reminder…" autocomplete="off" />' +
+    '<div class="capture"><input id="dashboard-capture" aria-label="Quick capture" placeholder="Quick capture — task, idea, reminder…" autocomplete="off" />' +
     '<button class="btn btn-primary" type="button" data-action="dashboard-capture">＋ Capture</button></div>' +
     '<div class="rollup-grid">' +
     metric(projectItems.length,'Active projects','Portfolios, programmes and projects','projects') +
-    metric(overdue.length,'Overdue actions','Needs a decision or next step','inbox') +
-    metric(focus.length,'Current focus','Your pinned priorities','now') +
-    metric(blocked.length,'Blocked items','Waiting or unable to move','projects') + '</div>' +
+    metric(overdue.length,'Overdue actions','Tasks and milestones past due','inbox') +
+    metric(focus.length,'Current focus','Pinned priorities · aim for 1–3','now') +
+    metric(blocked.length,'Blocked items','Items marked as blocked or waiting','projects') + '</div>' +
     '<div class="grid-two" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr));gap:14px;margin-bottom:14px">' +
-    '<section class="card"><div class="pipeline-head"><div class="pipeline-title">Current focus</div><a class="btn btn-sm" href="#" data-action="nav" data-view="now">Open Now</a></div>' +
+    '<section class="card"><div class="pipeline-head"><div class="pipeline-title">Today’s focus</div><a class="btn btn-sm" href="#" data-action="nav" data-view="now">Open Now</a></div>' +
     (focus.length ? focus.slice(0,3).map((it,i) => '<div class="focus-card" style="margin:8px 0"><div class="focus-num">'+(i+1)+'</div><div><div class="focus-title">'+esc(it.title)+'</div><div class="item-meta">'+esc(it.category || 'Unfiled')+'</div></div></div>').join('') :
     '<div class="view-sub" style="padding:12px 0">Nothing pinned yet. Choose one to three priorities for today.</div>') + '</section>' +
     '<section class="card"><div class="pipeline-head"><div class="pipeline-title">Overdue actions</div><span class="chip">'+overdue.length+'</span></div>' +
-    rows(overdue,'No overdue actions. Keep it that way.','dashboard-open-item') + '</section>' +
+    rows(overdue,'No overdue actions.','dashboard-open-item') + '</section>' +
     '<section class="card"><div class="pipeline-head"><div class="pipeline-title">Today & next 7 days</div><span class="chip">'+dueSoon.length+'</span></div>' +
-    rows(dueSoon,'Nothing due in the next seven days.','dashboard-open-item') + '</section>' +
+    rows(dueSoon,'Nothing with a due date in the next seven days.','dashboard-open-item') +
+    '<div class="view-sub" style="margin-top:8px">Appointments are not shown here unless they are recorded as dated items.</div></section>' +
+    '<section class="card"><div class="pipeline-head"><div class="pipeline-title">Projects needing attention</div><a class="btn btn-sm" href="#" data-action="nav" data-view="projects">All projects</a></div>' +
+    (attention.length ? attention.map(x=>'<div class="pipeline-row"><div class="item-main"><b>'+esc(x.p.title)+'</b><div class="item-meta">'+esc(x.p.category||'Unfiled')+' · '+esc(HEALTH_META[x.st.health]?.label||x.st.health)+'</div></div><button class="btn btn-sm" data-action="dashboard-open-item" data-id="'+esc(x.p.id)+'">Open</button></div>').join('') :
+    '<div class="view-sub" style="padding:12px 0">No active projects currently flagged overdue, behind, at risk, stalled or without a plan.</div>') + '</section>' +
     '<section class="card"><div class="pipeline-head"><div class="pipeline-title">Blocked / waiting</div><span class="chip">'+blocked.length+'</span></div>' +
-    rows(blocked,'Nothing currently marked as blocked.','dashboard-open-item') + '</section></div>' +
+    rows(blocked,'Nothing currently marked as blocked.','dashboard-open-item') + '</section>' +
+    '<section class="card"><div class="pipeline-head"><div class="pipeline-title">This week’s outcomes</div><a class="btn btn-sm" href="#" data-action="nav" data-view="review">Weekly review</a></div>' +
+    '<div class="view-sub">Choose the outcomes you want to finish this week during your review. Recently completed: '+finished.length+' item'+(finished.length===1?'':'s')+' in the last 7 days.</div>' +
+    '<div class="view-sub" style="margin-top:8px">Weekly outcomes are not yet stored as a separate planning record.</div></section></div>' +
     '<section class="card"><div class="pipeline-head"><div class="pipeline-title">Portfolio balance</div><a class="btn btn-sm" href="#" data-action="nav" data-view="projects">Manage</a></div>' +
     '<div class="rollup-grid" style="margin:0">' + levelCounts.map(x => '<div class="rollup-tile"><div class="v">'+x.count+'</div><div class="k">'+x.label+'s</div></div>').join('') + '</div>' +
-    '<div class="view-sub" style="margin-top:12px">Counts update from your active records. Open Projects to inspect the hierarchy and progress roll-ups.</div></section></div>';
+    '<div class="view-sub" style="margin-top:12px">Open commitments by life area (a workload proxy, not measured hours):</div>' +
+    (areaLoad.length ? areaLoad.map(x=>'<div class="pipeline-row"><div class="item-main">'+esc(x.name)+'</div><span class="chip">'+x.count+' open</span></div>').join('') :
+    '<div class="view-sub" style="padding:8px 0">No active commitments assigned to life areas yet.</div>') +
+    '<div class="view-sub" style="margin-top:10px">Time and money capacity cannot be assessed until available hours and budgets are recorded.</div></section>' +
+    '<div class="grid-two" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr));gap:14px;margin-top:14px">' +
+    reviewCard('Weekly Review',[
+      'What did I finish?',
+      'What is blocked or overdue?',
+      'What deserves attention this week?',
+      'What can I pause, delegate, defer or drop?',
+      'Is my workload aligned with my priorities?',
+      'What is the single most important next action for each active project?'
+    ],'review','Open review') +
+    reviewCard('Portfolio Review',[
+      'Which life areas are being neglected?',
+      'Which programmes and projects justify continued effort?',
+      'Are commitments exceeding available time or money?',
+      'What should receive more or less attention next month?'
+    ],'reports','Review portfolio') +
+    '</div></div>';
 }
 
 function renderNowView(){
