@@ -2564,6 +2564,12 @@ function renderLifeDashboard(){
     .sort((a,b)=>HEALTH_ORDER.indexOf(a.st.health)-HEALTH_ORDER.indexOf(b.st.health)).slice(0,5);
   const levelCounts = ['portfolio','program','project'].map(kind => ({kind,label:PROJECT_KINDS[kind].label,
     count:projectItems.filter(it => (it.kind || 'project') === kind).length}));
+  const actionStatusCounts = [
+    {label:'Overdue',count:actionItems.filter(it=>it.dueDate&&it.dueDate<today).length,detail:'Past their due date'},
+    {label:'Due in 7 days',count:actionItems.filter(it=>it.dueDate&&it.dueDate>=today&&it.dueDate<=iso(weekEnd)).length,detail:'Need attention soon'},
+    {label:'Blocked / waiting',count:blocked.filter(it=>it.type==='task'||it.type==='milestone').length,detail:'Waiting on something or someone'},
+    {label:'No due date',count:actionItems.filter(it=>!it.dueDate).length,detail:'Could use a realistic deadline'}
+  ];
   const esc = value => String(value == null ? '' : value).replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
   const dateLabel = value => value ? new Date(value+'T12:00:00').toLocaleDateString(undefined,{month:'short',day:'numeric'}) : 'No due date';
   const rows = (arr, empty, action) => arr.length ? arr.slice(0,5).map(it =>
@@ -2586,11 +2592,14 @@ function renderLifeDashboard(){
     metric(blocked.length,'Blocked items','Items marked as blocked or waiting','projects') + '</div>' +
     chartMissingNote() +
     '<div class="dashboard-charts">' +
-    '<section class="card dashboard-chart-card"><div class="pipeline-head"><div><div class="pipeline-title">Open commitments by life area</div><div class="dashboard-chart-sub">Open items, not measured hours</div></div><span class="chip">'+active.length+'</span></div><canvas id="chart-dashboard-areas" aria-label="Open commitments by life area chart"></canvas></section>' +
-    '<section class="card dashboard-chart-card"><div class="pipeline-head"><div><div class="pipeline-title">Portfolio structure</div><div class="dashboard-chart-sub">Active portfolios, programmes and projects</div></div><span class="chip">'+projectItems.length+'</span></div><canvas id="chart-dashboard-levels" aria-label="Portfolio structure chart"></canvas></section>' +
-    '<section class="card dashboard-chart-card"><div class="pipeline-head"><div><div class="pipeline-title">Action status</div><div class="dashboard-chart-sub">Due-date and blocker snapshot</div></div><span class="chip">'+actionItems.length+' actions</span></div><canvas id="chart-dashboard-actions" aria-label="Action status chart"></canvas></section>' +
+    '<section class="card dashboard-chart-card"><div class="pipeline-head"><div><div class="pipeline-title">Open commitments by life area</div><div class="dashboard-chart-sub">Open items, not measured hours</div></div><button class="btn btn-sm" data-action="nav" data-view="portfolio-review">Assess areas</button></div><canvas id="chart-dashboard-areas" aria-label="Open commitments by life area chart"></canvas>' +
+    (areaLoad.length?areaLoad.slice(0,5).map(x=>'<button class="pipeline-row" style="width:100%;text-align:left" data-action="nav" data-view="portfolio-review"><span class="item-main">'+esc(x.name)+'</span><span class="chip">'+x.count+' open</span></button>').join(''):'<div class="view-sub">No open items are assigned to a life area yet. Review whether your life areas are set up and items are categorized.</div>') + '</section>' +
+    '<section class="card dashboard-chart-card"><div class="pipeline-head"><div><div class="pipeline-title">Portfolio structure</div><div class="dashboard-chart-sub">Active portfolios, programmes and projects</div></div><button class="btn btn-sm" data-action="nav" data-view="projects">Review projects</button></div><canvas id="chart-dashboard-levels" aria-label="Portfolio structure chart"></canvas>' +
+    levelCounts.map(x=>'<button class="pipeline-row" style="width:100%;text-align:left" data-action="nav" data-view="projects"><span class="item-main">'+esc(x.label)+'</span><span class="chip">'+x.count+'</span></button>').join('') + '</section>' +
+    '<section class="card dashboard-chart-card"><div class="pipeline-head"><div><div class="pipeline-title">Action status</div><div class="dashboard-chart-sub">Due-date and blocker snapshot</div></div><button class="btn btn-sm" data-action="nav" data-view="inbox">Review actions</button></div><canvas id="chart-dashboard-actions" aria-label="Action status chart"></canvas>' +
+    actionStatusCounts.map(x=>'<button class="pipeline-row" style="width:100%;text-align:left" data-action="nav" data-view="inbox"><span class="item-main"><b>'+esc(x.label)+'</b><span class="item-meta">'+esc(x.detail)+'</span></span><span class="chip">'+x.count+'</span></button>').join('') + '</section>' +
     '</div>' +
-    '<div class="grid-two" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr));gap:14px;margin-bottom:14px">'
+    '<div class="grid-two" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr));gap:14px;margin-bottom:14px">' +
     '<section class="card"><div class="pipeline-head"><div class="pipeline-title">Today’s focus</div><a class="btn btn-sm" href="#" data-action="nav" data-view="now">Open Now</a></div>' +
     (focus.length ? focus.slice(0,3).map((it,i) => '<div class="focus-card" style="margin:8px 0"><div class="focus-num">'+(i+1)+'</div><div><div class="focus-title">'+esc(it.title)+'</div><div class="item-meta">'+esc(it.category || 'Unfiled')+'</div></div></div>').join('') :
     '<div class="view-sub" style="padding:12px 0">Nothing pinned yet. Choose one to three priorities for today.</div>') + '</section>' +
