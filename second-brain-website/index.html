@@ -2583,7 +2583,7 @@ function renderLifeDashboard(){
     '<div class="capture"><input id="dashboard-capture" aria-label="Quick capture" placeholder="Quick capture — task, idea, reminder…" autocomplete="off" />' +
     '<button class="btn btn-primary" type="button" data-action="dashboard-capture">＋ Capture</button></div>' +
     '<div class="rollup-grid">' +
-    metric(projectItems.length,'Active projects','Portfolios, programmes and projects','projects') +
+    metric(projectItems.length,scope==='all'?'All projects':'Unarchived projects','Portfolios, programmes and projects in this scope','projects') +
     metric(overdue.length,'Overdue actions','Tasks and milestones past due','inbox') +
     metric(focus.length,'Current focus','Pinned priorities · aim for 1–3','now') +
     metric(blocked.length,'Blocked items','Items marked as blocked or waiting','projects') + '</div>' +
