@@ -3693,7 +3693,7 @@ function fmtWeekLabel(weekOffset){
 }
 
 function renderAreaProgress(a){
-  const areaItems = items().filter(i=>i.category===a.name && (i.type==='task'||i.type==='project'));
+  const areaItems = items().filter(i=>i.category===a.name && (i.type==='task'||i.type==='project') && inReportProjectScope(i));
   const done = areaItems.filter(i=>i.status==='done').length;
   const total = areaItems.length;
   const pct = total? Math.round(done/total*100) : 0;
@@ -4004,7 +4004,7 @@ function doneDomains(){
 }
 /* The comparison also reports habits, so areas that only hold habits belong here. */
 function compareDomains(){
-  return doneDomains().concat(activeHabits().map(h=>h.category))
+  return doneDomains().filter(name=>ui.reportProjectScope!=='active' || completedItems().some(i=>i.category===name && inReportProjectScope(i))).concat(activeHabits().map(h=>h.category))
     .filter(Boolean).filter((v,i,a)=>a.indexOf(v)===i).sort();
 }
 
@@ -4100,7 +4100,7 @@ function winsData(rangeKey){
   });
   advanced.sort((a,b)=>b.effort-a.effort);
 
-  const tasksDone = completedItems().filter(i=>i.type==='task' && inRange(i.completedAt));
+  const tasksDone = completedItems().filter(i=>i.type==='task' && inRange(i.completedAt) && inReportProjectScope(i));
   const byArea = {};
   delivered.forEach(w=>{ byArea[w.p.category] = (byArea[w.p.category]||0) + 1; });
 
@@ -4118,7 +4118,7 @@ function winsByMonth(){
     const d = new Date(now.getFullYear(), now.getMonth()-i, 1);
     const key = fmtISO(d).slice(0,7);
     out.push({ key, label: d.toLocaleDateString(undefined,{month:'short'}),
-      n: projects().filter(p=>p.status==='done' && (p.completedAt||'').slice(0,7)===key).length });
+      n: reportProjectList().filter(p=>p.status==='done' && (p.completedAt||'').slice(0,7)===key).length });
   }
   return out;
 }
