@@ -1187,6 +1187,16 @@ const cloudPushDebounced = debounce(()=>{
 
 function persist(){ persistLocal(); cloudPushDebounced(); render(); }
 
+/* Life domains also have a dedicated shared Life Binder document. Save both
+   cloud records whenever domains change, so the binder watcher cannot restore
+   an older list over a newly edited domain. */
+function persistLifeAreas(){
+  if(window.SB_LB && typeof window.SB_LB.save === 'function'){
+    window.SB_LB.save(JSON.parse(JSON.stringify(state.state.lifeAreas)));
+  }
+  persist();
+}
+
 /* Which projects are archived used to live in its own cloud document, reconciled
    by its own rule ("whatever is in the cloud wins at boot"). Two documents meant
    two chances to disagree, and the Now pipeline reads this list — so a device
@@ -7026,21 +7036,21 @@ function handleAction(action, el){
         a.framework = lines('#ea-fw');
         a.routines = lines('#ea-rt').map(l=>{ const parts=l.split('|').map(x=>x.trim()); return {cadence:parts[0]||'',action:parts[1]||'',anchor:parts[2]||''}; });
         a.open_items = lines('#ea-oi');
-        closeModal(); persist(); pushToast('Area saved');
+        closeModal(); persistLifeAreas(); pushToast('Area saved');
       }
       break;
     }
     case 'new-area': modalNewArea(); break;
     case 'confirm-new-area': {
       const name = qs('#na-name').value.trim();
-      if(addLifeArea(name)){ closeModal(); persist(); pushToast('Area added'); }
+      if(addLifeArea(name)){ closeModal(); persistLifeAreas(); pushToast('Area added'); }
       else pushToast('Name already used or invalid');
       break;
     }
     case 'delete-area': { const a = state.state.lifeAreas.find(x=>x.name===el.getAttribute('data-area')); if(a) modalConfirmDeleteArea(a); break; }
     case 'confirm-delete-area': {
       const name = el.getAttribute('data-area');
-      deleteLifeArea(name); closeModal(); persist(); pushToast('Area deleted');
+      deleteLifeArea(name); closeModal(); persistLifeAreas(); pushToast('Area deleted');
       break;
     }
 
