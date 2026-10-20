@@ -997,8 +997,7 @@ function loadRoot(){
     if(!r.id) r.id=uid();
     if(!RECUR_TYPES[r.type]) r.type='weekly';
     if(!(r.interval>=1)) r.interval=1;
-    if(!Array.isArray(r.days) || !r.days.length) r.days=[0];
-    if(!(r.dayOfMonth>=1 && r.dayOfMonth<=31)) r.dayOfMonth=1;
+    if(!Array.isArray(r.days) || !r.days.length) r.days=[0];    if(!(r.dayOfMonth>=1 && r.dayOfMonth<=31)) r.dayOfMonth=1;
     if(!(r.month>=0 && r.month<=11)) r.month=0;
     if(!r.anchor) r.anchor = (r.createdAt||'').slice(0,10) || todayISO();
     if(typeof r.paused!=='boolean') r.paused=false;
@@ -1997,8 +1996,7 @@ function portfolioStats(list){
     offTrack: health.behind + health.risk + health.overdue,
     stalledCount: rows.filter(r=>r.st.stalled).length,
     health, byArea
-  };
-}
+  };}
 
 /* Every roll-up number is a question: which projects is this? Each tile and each
    domain row drills into the list behind it, so a "1 off track" is never a dead end.
@@ -2427,6 +2425,7 @@ function renderSidebar(){
     </div>
     ${navItem('inbox', icon('inbox'), 'Inbox', inboxCount||'')}
     ${navItem('now', icon('now'), 'Now / Today')}
+    ${navItem('dashboard', icon('reports'), 'My Life Dashboard')}
     ${navItem('projects', icon('projects'), 'Projects')}
     ${navItem('binder', icon('binder'), 'Life Binder')}
     ${navItem('habits', icon('habit'), 'Habits')}
@@ -2493,6 +2492,9 @@ function renderTopbar(){
 function renderView(){
   if(ui.processInbox) return renderProcessInbox();
   switch(ui.view){
+    case 'dashboard': return renderLifeDashboard();
+    case 'weekly-review': return renderWeeklyReview();
+    case 'portfolio-review': return renderPortfolioReview();
     case 'inbox': return renderInboxView();
     case 'projects': return renderProjectsView();
     case 'binder': return renderBinderView();
@@ -2526,6 +2528,126 @@ function scheduleMidnightRollover(){
     render();
     scheduleMidnightRollover();
   }, next-new Date());
+}
+
+function renderLifeDashboard(){
+  const today = todayISO();
+  const now = new Date();
+  const weekEnd = new Date(now); weekEnd.setDate(weekEnd.getDate()+7);
+  const iso = d => fmtISO(d);
+  const active = items().filter(it => it.status !== 'done' && it.status !== 'archived');
+  const projectItems = projects().filter(p => inactiveProjects.indexOf(p.id)===-1);
+  const actionItems = active.filter(it => it.type === 'task' || it.type === 'milestone');
+  const overdue = actionItems.filter(it => it.dueDate && it.dueDate < today)
+    .sort((a,b)=>a.dueDate.localeCompare(b.dueDate));
+  const dueSoon = actionItems.filter(it => it.dueDate && it.dueDate >= today && it.dueDate <= iso(weekEnd))
+    .sort((a,b) => a.dueDate.localeCompare(b.dueDate));
+  const blocked = active.filter(it => it.status === 'blocked' || it.blocked === true || !!it.blockedReason);
+  const focus = focusList();
+  const finished = completedItems().filter(it=>it.completedAt.slice(0,10)>=fmtISO(addDays(new Date(),-6)));
+  const lifeAreas = state.state.lifeAreas || [];
+  const areaNames = ['Inbox', ...lifeAreas.map(a=>a.name)];
+  const areaLoad = areaNames.map(name=>({name,count:active.filter(it=>it.category===name).length}))
+    .filter(x=>x.count>0).sort((a,b)=>b.count-a.count);
+  const attention = projectItems.map(p=>({p,st:projectStats(p)}))
+    .filter(x=>x.st && ['overdue','behind','risk','stalled','noplan'].includes(x.st.health))
+    .sort((a,b)=>HEALTH_ORDER.indexOf(a.st.health)-HEALTH_ORDER.indexOf(b.st.health)).slice(0,5);
+  const levelCounts = ['portfolio','program','project'].map(kind => ({kind,label:PROJECT_KINDS[kind].label,
+    count:projectItems.filter(it => (it.kind || 'project') === kind).length}));
+  const esc = value => String(value == null ? '' : value).replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+  const dateLabel = value => value ? new Date(value+'T12:00:00').toLocaleDateString(undefined,{month:'short',day:'numeric'}) : 'No due date';
+  const rows = (arr, empty, action) => arr.length ? arr.slice(0,5).map(it =>
+    '<button class="pick-row" style="width:100%;text-align:left" data-action="'+action+'" data-id="'+esc(it.id)+'">' +
+    '<span style="flex:1;min-width:0"><strong>'+esc(it.title)+'</strong><span class="item-meta">'+esc(it.category || 'Unfiled')+(it.dueDate ? ' · due '+esc(dateLabel(it.dueDate)) : '')+'</span></span>' +
+    '<span aria-hidden="true">›</span></button>').join('') : '<div class="view-sub" style="padding:12px 0">'+empty+'</div>';
+  const metric = (value,label,detail,view) => '<button class="rollup-tile" data-action="nav" data-view="'+view+'">' +
+    '<div class="v">'+value+'</div><div class="k">'+label+'</div><div class="drill">'+detail+'</div></button>';
+  const reviewCard = (title,questions,view,label) => '<section class="card"><div class="pipeline-head"><div class="pipeline-title">'+title+'</div><a class="btn btn-sm" href="#" data-action="nav" data-view="'+view+'">'+label+'</a></div><ul style="padding-left:20px;margin:8px 0 0">'+questions.map(q=>'<li style="margin:7px 0">'+q+'</li>').join('')+'</ul></section>';
+  return '<div class="view">' +
+    '<div class="view-head"><div><div class="view-title">My Life Dashboard</div>' +
+    '<div class="view-sub">A calm overview of what needs attention across your life. Counts are based on records you have entered.</div></div>' +
+    renderTodayStamp() + '</div>' +
+    '<div class="capture"><input id="dashboard-capture" aria-label="Quick capture" placeholder="Quick capture — task, idea, reminder…" autocomplete="off" />' +
+    '<button class="btn btn-primary" type="button" data-action="dashboard-capture">＋ Capture</button></div>' +
+    '<div class="rollup-grid">' +
+    metric(projectItems.length,'Active projects','Portfolios, programmes and projects','projects') +
+    metric(overdue.length,'Overdue actions','Tasks and milestones past due','inbox') +
+    metric(focus.length,'Current focus','Pinned priorities · aim for 1–3','now') +
+    metric(blocked.length,'Blocked items','Items marked as blocked or waiting','projects') + '</div>' +
+    '<div class="grid-two" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr));gap:14px;margin-bottom:14px">' +
+    '<section class="card"><div class="pipeline-head"><div class="pipeline-title">Today’s focus</div><a class="btn btn-sm" href="#" data-action="nav" data-view="now">Open Now</a></div>' +
+    (focus.length ? focus.slice(0,3).map((it,i) => '<div class="focus-card" style="margin:8px 0"><div class="focus-num">'+(i+1)+'</div><div><div class="focus-title">'+esc(it.title)+'</div><div class="item-meta">'+esc(it.category || 'Unfiled')+'</div></div></div>').join('') :
+    '<div class="view-sub" style="padding:12px 0">Nothing pinned yet. Choose one to three priorities for today.</div>') + '</section>' +
+    '<section class="card"><div class="pipeline-head"><div class="pipeline-title">Overdue actions</div><span class="chip">'+overdue.length+'</span></div>' +
+    rows(overdue,'No overdue actions.','dashboard-open-item') + '</section>' +
+    '<section class="card"><div class="pipeline-head"><div class="pipeline-title">Today & next 7 days</div><span class="chip">'+dueSoon.length+'</span></div>' +
+    rows(dueSoon,'Nothing with a due date in the next seven days.','dashboard-open-item') +
+    '<div class="view-sub" style="margin-top:8px">Appointments are not shown here unless they are recorded as dated items.</div></section>' +
+    '<section class="card"><div class="pipeline-head"><div class="pipeline-title">Projects needing attention</div><a class="btn btn-sm" href="#" data-action="nav" data-view="projects">All projects</a></div>' +
+    (attention.length ? attention.map(x=>'<div class="pipeline-row"><div class="item-main"><b>'+esc(x.p.title)+'</b><div class="item-meta">'+esc(x.p.category||'Unfiled')+' · '+esc(HEALTH_META[x.st.health]?.label||x.st.health)+'</div></div><button class="btn btn-sm" data-action="dashboard-open-item" data-id="'+esc(x.p.id)+'">Open</button></div>').join('') :
+    '<div class="view-sub" style="padding:12px 0">No active projects currently flagged overdue, behind, at risk, stalled or without a plan.</div>') + '</section>' +
+    '<section class="card"><div class="pipeline-head"><div class="pipeline-title">Blocked / waiting</div><span class="chip">'+blocked.length+'</span></div>' +
+    rows(blocked,'Nothing currently marked as blocked.','dashboard-open-item') + '</section>' +
+    '<section class="card"><div class="pipeline-head"><div class="pipeline-title">This week’s outcomes</div><a class="btn btn-sm" href="#" data-action="nav" data-view="review">Weekly review</a></div>' +
+    '<div class="view-sub">Choose the outcomes you want to finish this week during your review. Recently completed: '+finished.length+' item'+(finished.length===1?'':'s')+' in the last 7 days.</div>' +
+    '<div class="view-sub" style="margin-top:8px">Weekly outcomes are not yet stored as a separate planning record.</div></section></div>' +
+    '<section class="card"><div class="pipeline-head"><div class="pipeline-title">Portfolio balance</div><a class="btn btn-sm" href="#" data-action="nav" data-view="projects">Manage</a></div>' +
+    '<div class="rollup-grid" style="margin:0">' + levelCounts.map(x => '<div class="rollup-tile"><div class="v">'+x.count+'</div><div class="k">'+x.label+'s</div></div>').join('') + '</div>' +
+    '<div class="view-sub" style="margin-top:12px">Open commitments by life area (a workload proxy, not measured hours):</div>' +
+    (areaLoad.length ? areaLoad.map(x=>'<div class="pipeline-row"><div class="item-main">'+esc(x.name)+'</div><span class="chip">'+x.count+' open</span></div>').join('') :
+    '<div class="view-sub" style="padding:8px 0">No active commitments assigned to life areas yet.</div>') +
+    '<div class="view-sub" style="margin-top:10px">Time and money capacity cannot be assessed until available hours and budgets are recorded.</div></section>' +
+    '<div class="grid-two" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr));gap:14px;margin-top:14px">' +
+    reviewCard('Weekly Review',[
+      'What did I finish?',
+      'What is blocked or overdue?',
+      'What deserves attention this week?',
+      'What can I pause, delegate, defer or drop?',
+      'Is my workload aligned with my priorities?',
+      'What is the single most important next action for each active project?'
+    ],'weekly-review','Open review') +
+    reviewCard('Portfolio Review',[
+      'Which life areas are being neglected?',
+      'Which programmes and projects justify continued effort?',
+      'Are commitments exceeding available time or money?',
+      'What should receive more or less attention next month?'
+    ],'portfolio-review','Review portfolio') +
+    '</div></div>';
+}
+
+function renderWeeklyReview(){
+  const today = todayISO();
+  const weekAgo = fmtISO(addDays(new Date(),-6));
+  const done = completedItems().filter(it=>it.completedAt.slice(0,10)>=weekAgo && it.completedAt.slice(0,10)<=today);
+  const overdue = items().filter(it=>(it.type==='task'||it.type==='milestone') && it.status!=='done' && it.status!=='archived' && it.dueDate && it.dueDate<today);
+  const blocked = items().filter(it=>it.status!=='done' && it.status!=='archived' && (it.status==='blocked'||it.blocked===true||!!it.blockedReason));
+  const activeProjects = projects().filter(p=>inactiveProjects.indexOf(p.id)===-1 && p.status!=='done' && p.status!=='archived');
+  const esc = value => String(value == null ? '' : value).replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+  const panel = (title,body) => '<section class="card" style="margin-bottom:14px"><div class="pipeline-title">'+title+'</div>'+body+'</section>';
+  return '<div class="view"><div class="view-head"><div><div class="view-title">Weekly Review</div><div class="view-sub">Review reality first, then decide what deserves your attention next.</div></div><button class="btn" data-action="nav" data-view="dashboard">← Dashboard</button></div>' +
+    panel('1. What did I finish?','<div class="view-sub">'+done.length+' completed item'+(done.length===1?'':'s')+' in the last seven days.</div>'+(done.length?done.slice(0,8).map(it=>'<div class="pipeline-row"><div class="item-main">'+esc(it.title)+'<div class="item-meta">'+esc(it.category||'Unfiled')+'</div></div></div>').join(''):'<div class="view-sub" style="padding-top:8px">No completed items recorded in this window.</div>')) +
+    panel('2. What is blocked or overdue?','<div class="view-sub">'+blocked.length+' blocked/waiting · '+overdue.length+' overdue actions.</div>'+(blocked.concat(overdue.filter(it=>!blocked.some(b=>b.id===it.id))).slice(0,10).map(it=>'<div class="pipeline-row"><div class="item-main">'+esc(it.title)+'<div class="item-meta">'+esc(it.category||'Unfiled')+(it.dueDate?' · due '+esc(it.dueDate):'')+'</div></div></div>').join('')||'<div class="view-sub" style="padding-top:8px">Nothing currently flagged.</div>')) +
+    panel('3. What deserves attention this week?','<div class="view-sub">Choose your one to three current priorities in Now. Keep the week realistic.</div><button class="btn btn-primary" data-action="nav" data-view="now">Choose current focus</button>') +
+    panel('4. What can I pause, delegate, defer or drop?','<ul style="padding-left:20px"><li>Which active commitment no longer supports an important outcome?</li><li>What can someone else own?</li><li>What can safely wait until next week or next month?</li></ul>') +
+    panel('5. Is my workload aligned with my priorities?','<div class="view-sub">Open commitments are counted by life area on the dashboard. This is a task-count proxy, not a measurement of effort or available capacity.</div><button class="btn" data-action="nav" data-view="dashboard">Review workload by area</button>') +
+    panel('6. What is the next action for each active project?','<div class="view-sub">Review the next open milestone or task under each project. Projects with no clear next step should be clarified, paused or archived.</div>'+(activeProjects.length?activeProjects.slice(0,30).map(p=>{const next=(p.subtasks||[]).find(st=>!st.done);return '<div class="pipeline-row"><div class="item-main"><b>'+esc(p.title)+'</b><div class="item-meta">'+esc(next?next.title:'No open milestone recorded — define the next action')+'</div></div><button class="btn btn-sm" data-action="dashboard-open-item" data-id="'+esc(p.id)+'">Open</button></div>';}).join(''):'<div class="view-sub" style="padding-top:8px">No active projects.</div>')) +
+    '<div class="view-sub">This page assembles a review from live records; it does not automatically change priorities or commitments.</div></div>';
+}
+
+function renderPortfolioReview(){
+  const active = items().filter(it=>it.status!=='done' && it.status!=='archived');
+  const projectsActive = projects().filter(p=>inactiveProjects.indexOf(p.id)===-1 && p.status!=='done' && p.status!=='archived');
+  const areas = state.state.lifeAreas || [];
+  const esc = value => String(value == null ? '' : value).replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+  const areaRows = ['Inbox',...areas.map(a=>a.name)].map(name=>({name,items:active.filter(it=>it.category===name),projects:projectsActive.filter(p=>p.category===name)}));
+  return '<div class="view"><div class="view-head"><div><div class="view-title">Portfolio Review</div><div class="view-sub">Check whether your commitments still deserve the time, money and attention they require.</div></div><button class="btn" data-action="nav" data-view="dashboard">← Dashboard</button></div>' +
+    '<div class="rollup-grid"><div class="rollup-tile"><div class="v">'+projectsActive.length+'</div><div class="k">Active portfolio items</div></div><div class="rollup-tile"><div class="v">'+active.length+'</div><div class="k">Open commitments</div></div><div class="rollup-tile"><div class="v">'+areas.filter(a=>areaRows.find(x=>x.name===a.name).items.length===0).length+'</div><div class="k">Life areas with no open items</div></div></div>' +
+    '<section class="card" style="margin:14px 0"><div class="pipeline-title">1. Which areas of life are being neglected?</div><div class="view-sub" style="margin:8px 0">Open-item counts show recorded commitments only. Zero items does not prove an area is neglected or well cared for.</div>' +
+    areaRows.map(x=>'<div class="pipeline-row"><div class="item-main"><b>'+esc(x.name)+'</b><div class="item-meta">'+x.projects.length+' active portfolio item'+(x.projects.length===1?'':'s')+'</div></div><span class="chip">'+x.items.length+' open</span></div>').join('')+'</section>' +
+    '<section class="card" style="margin-bottom:14px"><div class="pipeline-title">2. Which programmes and projects justify continued effort?</div><div class="view-sub" style="margin:8px 0">Use health, value, strategic fit, and cost to decide whether to continue, reshape, pause or stop. The app cannot infer business or personal value from task counts alone.</div>' +
+    (projectsActive.length?projectsActive.map(p=>{const st=projectStats(p);return '<div class="pipeline-row"><div class="item-main"><b>'+esc(p.title)+'</b><div class="item-meta">'+esc(p.category||'Unfiled')+' · '+esc(HEALTH_META[st.health]?.label||st.health)+'</div></div><button class="btn btn-sm" data-action="dashboard-open-item" data-id="'+esc(p.id)+'">Review</button></div>';}).join(''):'<div class="view-sub">No active projects.</div>')+'</section>' +
+    '<section class="card" style="margin-bottom:14px"><div class="pipeline-title">3. Are commitments exceeding available time or money?</div><div class="view-sub" style="margin:8px 0">Not enough data to assess capacity: available hours, estimated effort and committed budgets are not consistently recorded as comparable portfolio-wide values.</div><ul style="padding-left:20px"><li>Estimate the hours you realistically have next month.</li><li>List known costs and the budget you can safely commit.</li><li>Compare those limits with the projects you intend to continue.</li></ul></section>' +
+    '<section class="card"><div class="pipeline-title">4. What should receive more or less attention next month?</div><ul style="padding-left:20px"><li>Increase attention for work with high value and a clear next step.</li><li>Reduce or pause low-value work that consumes scarce time or money.</li><li>Keep room for family, health, faith, rest and unplanned obligations.</li></ul><div class="view-sub">These are review prompts, not a saved allocation plan. Record decisions in your project records after reviewing.</div></section></div>';
 }
 
 function renderNowView(){
@@ -2997,8 +3119,7 @@ function renderBoard(p){
   const sprints = sprintsOf(p);
   const sprint = activeSprint(p);
   const all = backlogOf(p);
-  const list = scope==='all' ? all
-             : scope==='none' ? all.filter(b=>!b.sprintId)
+  const list = scope==='all' ? all             : scope==='none' ? all.filter(b=>!b.sprintId)
              : all.filter(b=>b.sprintId===scope);
   const tally = sprint ? sprintTally(p, sprint.id) : null;
   const hybrid = (p.method||'traditional')==='hybrid';
@@ -3997,8 +4118,7 @@ function renderReportsWinsView(){
             ${x.underBudget===false?'<span class="health-chip health-risk">over budget</span>':''}
           </div>
           <div class="view-sub" style="margin-top:4px">
-            Finished ${pretty(x.p.completedAt)} · ${x.steps} step${x.steps===1?'':'s'} · ${pts(x.effort)} effort point${x.effort===1?'':'s'} · ${x.days} day${x.days===1?'':'s'} from start to done${x.p.budget!=null?` · ${money(x.p.actualCost||0)} of ${withCurrency(x.p.budget)} spent`:''}${x.risksClosed?` · ${x.risksClosed} risk${x.risksClosed===1?'':'s'} seen off`:''}
-          </div>
+            Finished ${pretty(x.p.completedAt)} · ${x.steps} step${x.steps===1?'':'s'} · ${pts(x.effort)} effort point${x.effort===1?'':'s'} · ${x.days} day${x.days===1?'':'s'} from start to done${x.p.budget!=null?` · ${money(x.p.actualCost||0)} of ${withCurrency(x.p.budget)} spent`:''}${x.risksClosed?` · ${x.risksClosed} risk${x.risksClosed===1?'':'s'} seen off`:''}          </div>
         </div>`).join('')}
     ` : ''}
 
@@ -4997,8 +5117,7 @@ function raidPanel(p){
   const list = (p.risks||[]).slice().sort((a,b)=>riskScore(b)-riskScore(a));
   const live = liveRisks(p);
   return `
-    <div class="section-label" style="display:flex;justify-content:space-between;align-items:center">
-      <span>Risks, issues, assumptions, dependencies</span>
+    <div class="section-label" style="display:flex;justify-content:space-between;align-items:center">      <span>Risks, issues, assumptions, dependencies</span>
       <button class="btn btn-sm" data-action="add-risk" data-id="${p.id}">+ Add</button>
     </div>
     ${list.length ? `
@@ -5997,8 +6116,7 @@ function exportAreasReport(){
   const html = `<h1>Life areas</h1>
     <p class="muted">Generated ${new Date().toLocaleDateString(undefined,{year:'numeric',month:'long',day:'numeric'})} &nbsp;·&nbsp; ${areas.length} area${areas.length===1?'':'s'}</p>
     <table cellpadding="6" cellspacing="0" border="1" style="border-collapse:collapse;border-color:#E2E8F0">
-      <tr><th align="left">Life area</th><th align="right">Tasks done</th><th align="right">Task %</th><th align="right">Projects</th><th align="right">Project %</th><th align="right">Off track</th><th align="right">Habit 30d</th></tr>
-      ${rows.map(r=>`<tr><td>${esc(r.name)}</td><td align="right">${r.done}/${r.total}</td><td align="right">${r.taskPct==null?'—':r.taskPct+'%'}</td><td align="right">${r.projects}</td><td align="right">${r.projPct==null?'—':r.projPct+'%'}</td><td align="right">${r.offTrack}</td><td align="right">${r.habitPct==null?'—':r.habitPct+'%'}</td></tr>`).join('')}
+      <tr><th align="left">Life area</th><th align="right">Tasks done</th><th align="right">Task %</th><th align="right">Projects</th><th align="right">Project %</th><th align="right">Off track</th><th align="right">Habit 30d</th></tr>      ${rows.map(r=>`<tr><td>${esc(r.name)}</td><td align="right">${r.done}/${r.total}</td><td align="right">${r.taskPct==null?'—':r.taskPct+'%'}</td><td align="right">${r.projects}</td><td align="right">${r.projPct==null?'—':r.projPct+'%'}</td><td align="right">${r.offTrack}</td><td align="right">${r.habitPct==null?'—':r.habitPct+'%'}</td></tr>`).join('')}
     </table>
     <p class="muted">Task % counts tasks and projects closed in the area. Project % is effort-weighted across that area's active projects; areas whose projects have no milestones show no percentage.</p>`;
   downloadWordDoc(`life-areas-${todayISO()}.doc`, 'Life areas', html);
@@ -6908,6 +7026,17 @@ function handleAction(action, el){
       break;
     }
 
+    case 'dashboard-capture': {
+      const input = qs('#dashboard-capture');
+      const title = input && input.value.trim();
+      if(title){ newItem({title, type:'task', category:'Inbox'}); input.value=''; ui.view='dashboard'; persist(); pushToast('Captured to Inbox'); }
+      break;
+    }
+    case 'dashboard-open-item': {
+      const target = byId(id);
+      if(target){ ui.view = target.type==='project' ? 'projects' : 'inbox'; ui.processInbox=false; }
+      break;
+    }
     case 'new-project': modalNewProject(el.getAttribute('data-kind')); break;
     // Switching level mid-form rebuilds it: a portfolio has no parent to pick and
     // no milestones to list, so the form should stop offering them.
@@ -6997,8 +7126,7 @@ function handleAction(action, el){
     case 'toggle-hb-day': el.classList.toggle('on'); break;
     case 'habit-week': ui.habitWeekOffset = Math.max(0, ui.habitWeekOffset + (+el.getAttribute('data-dir'))); render(); break;
     case 'toggle-inactive-habits': ui.showInactiveHabits = !ui.showInactiveHabits; render(); break;
-    case 'toggle-habit-active': {
-      const h = state.state.habits.find(x=>x.id===id);
+    case 'toggle-habit-active': {      const h = state.state.habits.find(x=>x.id===id);
       if(h){ h.active = h.active===false; pushToast(h.active? `"${h.name}" is active again` : `"${h.name}" retired — its history is kept`); persist(); }
       break;
     }
