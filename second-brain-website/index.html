@@ -1029,10 +1029,20 @@ function loadRoot(){
 
 function migrateAreasIfNeeded(){
   if(state.areasMigratedV2) return Promise.resolve();
-  if(typeof window.SB_LB==='undefined') return Promise.resolve();
+
+  // The primary app snapshot is now authoritative for Life Binder content.
+  // Only import the separate legacy binder document when the snapshot has no
+  // life areas at all; never replace populated, newer data with a stale copy.
+  if(typeof window.SB_LB==='undefined' || typeof db==='undefined'){
+    state.areasMigratedV2 = true;
+    persist();
+    return Promise.resolve();
+  }
+
   return window.SB_LB.load().then(()=>{
     const binderAreas = window.SB_LB.areas();
-    if(Array.isArray(binderAreas) && binderAreas.length){
+    if((!Array.isArray(state.state.lifeAreas) || state.state.lifeAreas.length===0)
+        && Array.isArray(binderAreas) && binderAreas.length){
       state.state.lifeAreas = JSON.parse(JSON.stringify(binderAreas));
     }
     // Only rename the six legacy categories this map knows about. Anything else is
@@ -1044,8 +1054,14 @@ function migrateAreasIfNeeded(){
       }
     });
     state.areasMigratedV2 = true;
+    // Bring the legacy binder document into line with the primary snapshot too.
+    persistLifeAreas();
+  }).catch(()=>{
+    // A temporary binder read failure must not cause a later boot to import an
+    // older copy over the current snapshot.
+    state.areasMigratedV2 = true;
     persist();
-  }).catch(()=>{});
+  });
 }
 
 /* =========================================================
@@ -7341,10 +7357,10 @@ function watchCloud(){
     adoptCloud(cloud);
   }, ()=>{ sync.watching = false; });
 
-  if(window.SB_LB && window.SB_LB.watch) window.SB_LB.watch(areas=>{
-    if(Array.isArray(areas) && areas.length) state.state.lifeAreas = JSON.parse(JSON.stringify(areas));
-    render();
-  });
+  // Life Binder is part of the primary app snapshot. Do not watch the separate
+  // legacy life-binder document here: its independent copy can be stale and
+  // overwrite newer edits (especially removals from open_items) after reload.
+  // The primary snapshot listener above already syncs Life Binder across devices.
 }
 
 /* A phone spends most of its life with this page in the background, where the
