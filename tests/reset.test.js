@@ -115,12 +115,9 @@ async function launch() {
   ok('the Review checklist renders', await page.locator('.rv-step').count() > 0,
     await page.locator('.rv-step').count());
   ok('  with all three cadences', await page.locator('[data-action="review-tab"]').count() === 3);
-  await page.click('[data-action="nav"][data-view="binder"]');
-  await page.waitForTimeout(400);
-  // The binder used to sit blank until a later boot happened to re-seed it, which
-  // reads to the owner as "the reset deleted my Life Binder".
-  ok('the Life Binder is already back', await page.locator('.area-card').count() > 0,
-    await page.locator('.area-card').count());
+  // Life Binder navigation was intentionally removed; life domains remain data/categories.
+  ok('Life Binder tab is removed', await page.locator('[data-action="nav"][data-view="binder"]').count() === 0);
+  ok('life domains remain available after reset', Array.isArray((await st()).lifeAreas));
 
   console.log('\nAFTER RE-IMPORTING AND RELOADING');
   await page.click('[data-action="nav"][data-view="settings"]');
