@@ -4929,7 +4929,21 @@ function modalNewProject(kind){
   const areas = state.state.lifeAreas;
   kind = PROJECT_KINDS[kind] ? kind : 'project';
   const parents = projects().filter(isContainerKind)
-    .filter(x=>kind==='program' ? x.kind==='portfolio' : kind==='project');
+    .filter(x=>kind==='program' ? x.kind==='portfolio' : x.kind==='project');
+  const attachable = kind==='program'
+    ? projects().filter(x=>(x.kind||'project')==='project' && !isContainerKind(x))
+    : kind==='portfolio'
+      ? projects().filter(x=>x.kind==='program' || (x.kind||'project')==='project')
+      : [];
+  const selectionTitle = kind==='program' ? 'Add existing projects to this program'
+    : kind==='portfolio' ? 'Add existing programs and projects to this portfolio' : '';
+  const selectionHtml = attachable.length && selectionTitle ? `
+    <div class="field"><label>${selectionTitle}</label>
+      <div class="view-sub" style="margin-bottom:8px">Choose any existing items to include. They will be moved under the new container.</div>
+      <div style="max-height:180px;overflow:auto;border:1px solid var(--c-border);border-radius:8px;padding:8px">
+        ${attachable.map(x=>`<label style="display:flex;align-items:center;gap:8px;padding:6px 2px"><input type="checkbox" name="np-child" value="${esc(x.id)}"/> <span>${PROJECT_KINDS[x.kind||'project'].mark} ${esc(x.title)}</span></label>`).join('')}
+      </div>
+    </div>` : '';
   openModal(`
     <h3>New ${PROJECT_KINDS[kind].label.toLowerCase()}</h3>
     <div class="field"><label>Title</label><input id="np-title" placeholder="${PROJECT_KINDS[kind].label} name" /></div>
@@ -4938,6 +4952,7 @@ function modalNewProject(kind){
     </div>
     ${kind!=='portfolio' && parents.length ? `<div class="field"><label>Sits under (optional)</label>
       <select id="np-parent"><option value="">Nothing — stands on its own</option>${parents.map(x=>`<option value="${esc(x.id)}">${PROJECT_KINDS[x.kind].mark} ${esc(x.title)}</option>`).join('')}</select></div>`:''}
+    ${selectionHtml}
     <div class="field"><label>Life domain</label><select id="np-cat">${areas.map(a=>`<option value="${esc(a.name)}">${esc(a.name)}</option>`).join('')}</select></div>
     <div class="field"><label>Priority</label><select id="np-pri"><option value="low">Low</option><option value="medium" selected>Medium</option><option value="high">High</option></select></div>
     <div class="field"><label>Start date (optional)</label><input id="np-start" type="date"/><div class="view-sub" style="margin-top:4px">Leave blank to measure the schedule from today. Set it when work begins later.</div></div>
@@ -4951,7 +4966,6 @@ function modalNewProject(kind){
     </div>`);
   setTimeout(()=>qs('#np-title')&&qs('#np-title').focus(),0);
 }
-
 /* A checkbox list for a filter with more options than a chip row can carry —
    seventeen domains as seventeen chips is a wall, not a control. Ticking applies
    at once so the list behind it updates as you go; there is no Save to forget. */
@@ -7258,15 +7272,21 @@ function handleAction(action, el){
           .map(t=>({id:uid(), title:t, done:false, xpAwarded:false, effort:DEFAULT_EFFORT, doneAt:null, pct:null}));
         const kindEl = qs('#np-kind');
         const parentEl = qs('#np-parent');
-        newItem({
+        const created = newItem({
           title, type:'project', category:qs('#np-cat').value, priority:qs('#np-pri').value,
           kind: (kindEl && PROJECT_KINDS[kindEl.value]) ? kindEl.value : 'project',
           parentId: parentEl ? (parentEl.value || null) : null,
-          weight: 1,
-          startDate: npStart,
-          dueDate: npDue,
-          assignee: qs('#np-assignee').value.trim() || null,
-          subtasks: milestones
+          weight: 1, startDate: npStart, dueDate: npDue,
+          assignee: qs('#np-assignee').value.trim() || null, subtasks: milestones
+        });
+        const selectedChildren = Array.from(document.querySelectorAll('input[name="np-child"]:checked')).map(x=>x.value);
+        selectedChildren.forEach(childId=>{
+          const child=byId(childId);
+          if(!child || child.type!=='project' || child.id===created.id) return;
+          const valid = created.kind==='program'
+            ? (child.kind||'project')==='project' && !isContainerKind(child)
+            : created.kind==='portfolio' && (child.kind==='program' || (child.kind||'project')==='project');
+          if(valid) child.parentId=created.id;
         });
         closeModal(); persist();
       }
