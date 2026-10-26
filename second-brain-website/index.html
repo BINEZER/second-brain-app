@@ -2429,6 +2429,7 @@ function render(){
   app.innerHTML = renderSidebar() + renderMain();
   wireGlobal();
   renderCharts();
+  ensurePomodoroTicker();
   // Typing in a filter box re-renders the list underneath it — keep the caret.
   if(focusId){
     const back = document.getElementById(focusId);
@@ -2459,6 +2460,7 @@ function renderSidebar(){
     ${navItem('inbox', icon('inbox'), 'Inbox', inboxCount||'')}
     ${navItem('now', icon('now'), 'Now / Today')}
     ${navItem('prioritize', icon('reports'), 'Prioritize')}
+    ${navItem('pomodoro', icon('now'), 'Focus Timer')}
     ${navItem('projects', icon('projects'), 'Projects')}
     ${navItem('binder', icon('binder'), 'Life Binder')}
     ${navItem('habits', icon('habit'), 'Habits')}
@@ -2536,6 +2538,7 @@ function renderView(){
     case 'recurring': return renderRecurringView();
     case 'reports': return renderReportsView();
     case 'prioritize': return renderPrioritizeView();
+    case 'pomodoro': return renderPomodoroView();
     case 'review': return renderReviewView();
     case 'settings': return renderSettingsView();
     default: return renderNowView();
@@ -2664,6 +2667,41 @@ function prioritizationEntries(){
     }).sort((a,b)=>EISENHOWER_QUADRANTS[a.quadrant].order-EISENHOWER_QUADRANTS[b.quadrant].order
       ||((a.item.dueDate||'9999-99-99').localeCompare(b.item.dueDate||'9999-99-99')));
 }
+const POMODORO_DEFAULTS={focusMinutes:25,breakMinutes:5,taskId:'',running:false,startedAt:null,remainingSeconds:1500,elapsedSeconds:0,notifications:false,sessionKind:'focus'};
+function pomodoroState(){
+ const settings=state.state.settings||(state.state.settings={});
+ if(!settings.pomodoro||typeof settings.pomodoro!=='object')settings.pomodoro={...POMODORO_DEFAULTS};
+ const p=settings.pomodoro;Object.keys(POMODORO_DEFAULTS).forEach(k=>{if(p[k]===undefined)p[k]=POMODORO_DEFAULTS[k];});
+ p.focusMinutes=Math.max(1,Math.min(120,Number(p.focusMinutes)||25));p.breakMinutes=Math.max(1,Math.min(60,Number(p.breakMinutes)||5));
+ p.remainingSeconds=Math.max(0,Number(p.remainingSeconds)||0);p.elapsedSeconds=Math.max(0,Number(p.elapsedSeconds)||0);return p;
+}
+function pomodoroRemaining(p){return Math.max(0,Number(p.remainingSeconds||0)-(p.running&&p.startedAt?Math.floor((Date.now()-Date.parse(p.startedAt))/1000):0));}
+function fmtTimer(seconds){seconds=Math.max(0,Math.floor(seconds||0));return String(Math.floor(seconds/60)).padStart(2,'0')+':'+String(seconds%60).padStart(2,'0');}
+function fmtTrackedTime(seconds){seconds=Math.max(0,Math.floor(seconds||0));const h=Math.floor(seconds/3600),m=Math.floor((seconds%3600)/60);return h?h+'h '+m+'m':m+'m';}
+function taskTrackedSeconds(task){return Math.max(0,Number(task&&task.timeSpentSeconds)||0);}
+function renderPomodoroView(){
+ const p=pomodoroState(),remaining=pomodoroRemaining(p),taskList=openTasks().filter(t=>t.type==='task'),chosen=byId(p.taskId),isBreak=p.sessionKind==='break';
+ const total=(isBreak?p.breakMinutes:p.focusMinutes)*60,progress=total?Math.max(0,Math.min(100,(1-remaining/total)*100)):0,tracked=chosen?taskTrackedSeconds(chosen):0;
+ const taskRows=taskList.slice().sort((a,b)=>String(a.title||'').localeCompare(String(b.title||'')));
+ return '<div class="view"><div class="view-head"><div><div class="view-title">Focus Timer</div><div class="view-sub">A quiet Pomodoro timer that logs focused time to the selected task.</div></div></div>'+
+ '<section class="card" style="max-width:640px;margin:0 auto"><div class="chip-row" style="justify-content:center;margin-bottom:14px"><button class="chip '+(!isBreak?'on':'')+'" data-action="pomodoro-mode" data-mode="focus">Focus</button><button class="chip '+(isBreak?'on':'')+'" data-action="pomodoro-mode" data-mode="break">Break</button></div>'+
+ '<div style="text-align:center;padding:10px 0 18px"><div id="pomodoro-clock" style="font-family:monospace;font-size:clamp(48px,9vw,76px);font-weight:600;letter-spacing:-.05em;line-height:1.1;font-variant-numeric:tabular-nums">'+fmtTimer(remaining)+'</div><div class="view-sub" id="pomodoro-status" style="margin-top:8px">'+(p.running?'Session in progress':isBreak?'Rest your mind':'Ready when you are')+'</div>'+
+ '<div style="height:5px;background:var(--c-surface-alt);border-radius:99px;overflow:hidden;margin:22px 6px 18px"><div id="pomodoro-progress" style="height:100%;width:'+progress+'%;background:var(--c-focus);transition:width .5s linear"></div></div><div style="display:flex;gap:8px;justify-content:center;flex-wrap:wrap">'+
+ (p.running?'<button class="btn btn-primary" data-action="pomodoro-pause">Pause</button>':'<button class="btn btn-primary" data-action="pomodoro-start">Start / Resume</button>')+'<button class="btn" data-action="pomodoro-reset">Reset</button><button class="btn" data-action="pomodoro-skip">'+(isBreak?'End break':'Finish focus & take a break')+'</button></div></div>'+
+ '<div class="field"><label for="pomodoro-task">Track time against task</label><select id="pomodoro-task" data-action-change="pomodoro-task" '+(p.running?'disabled':'')+'><option value="">Choose an open task…</option>'+
+ taskRows.map(t=>'<option value="'+esc(t.id)+'" '+(t.id===p.taskId?'selected':'')+'>'+esc(t.title)+(t.projectId?' — '+esc((byId(t.projectId)||{}).title||'Project'):'')+'</option>').join('')+
+ '</select><div class="view-sub" style="margin-top:5px">Only open tasks appear here; programmes and portfolios cannot be selected.</div></div><div class="rollup-grid" style="margin-top:14px"><div class="rollup-tile"><div class="v">'+(chosen?fmtTrackedTime(tracked):'—')+'</div><div class="k">Total tracked</div></div><div class="rollup-tile"><div class="v">'+(chosen?(chosen.timeSessions||[]).length:0)+'</div><div class="k">Sessions logged</div></div></div>'+
+ '<div style="border-top:1px solid var(--c-border);margin-top:16px;padding-top:14px"><div class="pipeline-title" style="margin-bottom:10px">Timer settings</div><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px"><div class="field" style="margin:0"><label for="pomodoro-focus">Focus (minutes)</label><input id="pomodoro-focus" data-action-change="pomodoro-duration" data-kind="focus" type="number" min="1" max="120" value="'+p.focusMinutes+'" '+(p.running?'disabled':'')+'/></div><div class="field" style="margin:0"><label for="pomodoro-break">Break (minutes)</label><input id="pomodoro-break" data-action-change="pomodoro-duration" data-kind="break" type="number" min="1" max="60" value="'+p.breakMinutes+'" '+(p.running?'disabled':'')+'/></div></div><label style="display:flex;gap:9px;align-items:center;margin-top:14px;font-size:13px;color:var(--c-text-secondary)"><input type="checkbox" data-action-change="pomodoro-notifications" '+(p.notifications?'checked':'')+'/> Subtle notification when a session ends</label><div class="view-sub" style="margin-top:6px">Shows a quiet in-app notice; desktop notifications are used only if the browser permits them.</div></div></section>'+
+ '<section class="card" style="max-width:640px;margin:14px auto 0"><div class="pipeline-head"><div class="pipeline-title">Open tasks</div><span class="chip">'+taskList.length+'</span></div>'+
+ (taskList.length?taskRows.slice(0,8).map(t=>'<div class="pipeline-row"><div class="item-main"><button class="clickable-title" data-action="pomodoro-select-task" data-id="'+esc(t.id)+'" style="text-align:left">'+esc(t.title)+'</button><div class="item-meta">'+esc((byId(t.projectId)||{}).title||'Standalone')+' · '+fmtTrackedTime(taskTrackedSeconds(t))+' tracked</div></div><button class="btn btn-sm" data-action="pomodoro-select-task" data-id="'+esc(t.id)+'">Focus</button></div>').join(''):'<div class="view-sub">Add a task in Inbox to start tracking time.</div>')+'</section></div>';
+}
+function logPomodoroTime(p,seconds,completed){
+ const elapsed=Math.max(0,Math.floor(seconds||0)),task=byId(p.taskId);
+ if(elapsed>0&&task&&task.type==='task'&&p.sessionKind!=='break'){task.timeSpentSeconds=taskTrackedSeconds(task)+elapsed;if(!Array.isArray(task.timeSessions))task.timeSessions=[];task.timeSessions.push({id:uid(),date:new Date().toISOString(),seconds:elapsed,kind:'focus',completed:!!completed});}
+}
+function pomodoroNotice(message){pushToast(message);const p=pomodoroState();if(p.notifications&&typeof Notification!=='undefined'&&Notification.permission==='granted'){try{new Notification('Focus Timer',{body:message,silent:true});}catch(e){}}}
+let pomodoroTickHandle=null;
+function ensurePomodoroTicker(){if(pomodoroTickHandle)return;pomodoroTickHandle=setInterval(()=>{const p=pomodoroState(),remaining=pomodoroRemaining(p);if(p.running&&remaining<=0){const elapsed=p.remainingSeconds;p.running=false;p.startedAt=null;logPomodoroTime(p,elapsed,true);p.elapsedSeconds=0;p.remainingSeconds=(p.sessionKind==='break'?p.breakMinutes:p.focusMinutes)*60;persist();pomodoroNotice(p.sessionKind==='break'?'Break complete. Ready for another focus session?':'Focus session complete. Time for a short break?');return;}const clock=qs('#pomodoro-clock'),progress=qs('#pomodoro-progress');if(!clock||!progress)return;clock.textContent=fmtTimer(remaining);const total=(p.sessionKind==='break'?p.breakMinutes:p.focusMinutes)*60;progress.style.width=(total?Math.max(0,Math.min(100,(1-remaining/total)*100)):0)+'%';},1000);}
 function renderPrioritizeView(){
   const entries=prioritizationEntries();
   const esc=value=>String(value==null?'':value).replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
@@ -5564,7 +5602,7 @@ function parentOptions(p){
 function modalEditItem(item){
   const areaNames = ['Inbox', ...state.state.lifeAreas.map(a=>a.name)];
   // A task belongs to a project. A programme or portfolio holds projects, not tasks.
-  const projectOptions = projects().filter(p=>p.id!==item.id && !isContainerKind(p));
+  const projectOptions = projects().filter(p=>p.id!==item.id && (p.kind==null || p.kind==='project') && !isContainerKind(p));
   const isProj = item.type==='project';
   const kind = item.kind || 'project';
   const parents = isProj ? parentOptions(item) : [];
@@ -6527,6 +6565,15 @@ function handleAction(action, el){
     case 'process-inbox': ui.processInbox = true; ui.triageIndex = 0; ui.triageSkipped = []; render(); break;
     case 'exit-triage': ui.processInbox = false; render(); break;
 
+    case 'pomodoro-task': {const p=pomodoroState();if(!p.running){p.taskId=el.value||'';persist();}break;}
+    case 'pomodoro-select-task': {const p=pomodoroState();if(!p.running){p.taskId=id||'';persist();}break;}
+    case 'pomodoro-duration': {const p=pomodoroState();if(p.running)break;const n=Math.round(Number(el.value)||0),kind=el.getAttribute('data-kind');if(kind==='focus'&&n>=1&&n<=120){p.focusMinutes=n;if(p.sessionKind!=='break')p.remainingSeconds=n*60;}else if(kind==='break'&&n>=1&&n<=60){p.breakMinutes=n;if(p.sessionKind==='break')p.remainingSeconds=n*60;}else{pushToast(kind==='focus'?'Choose 1–120 minutes':'Choose 1–60 minutes');render();break;}p.elapsedSeconds=0;persist();break;}
+    case 'pomodoro-notifications': {const p=pomodoroState();p.notifications=!!el.checked;if(p.notifications&&typeof Notification!=='undefined'&&Notification.permission==='default'){Notification.requestPermission().catch(()=>{});}persist();break;}
+    case 'pomodoro-mode': {const p=pomodoroState();if(p.running)break;p.sessionKind=el.getAttribute('data-mode')==='break'?'break':'focus';p.remainingSeconds=(p.sessionKind==='break'?p.breakMinutes:p.focusMinutes)*60;p.elapsedSeconds=0;persist();break;}
+    case 'pomodoro-start': {const p=pomodoroState();if(!p.taskId){pushToast('Choose a task first to track your time');break;}if(!byId(p.taskId)||byId(p.taskId).type!=='task'){p.taskId='';persist();pushToast('Choose an open task');break;}if(p.remainingSeconds<=0)p.remainingSeconds=(p.sessionKind==='break'?p.breakMinutes:p.focusMinutes)*60;p.startedAt=new Date().toISOString();p.running=true;persist();break;}
+    case 'pomodoro-pause': {const p=pomodoroState();if(p.running){const elapsed=Math.max(0,Math.floor((Date.now()-Date.parse(p.startedAt))/1000)),used=Math.min(p.remainingSeconds,elapsed);logPomodoroTime(p,used,false);p.remainingSeconds=Math.max(0,p.remainingSeconds-used);p.elapsedSeconds=0;p.startedAt=null;p.running=false;persist();}break;}
+    case 'pomodoro-reset': {const p=pomodoroState();if(p.running){const elapsed=Math.max(0,Math.floor((Date.now()-Date.parse(p.startedAt))/1000));logPomodoroTime(p,Math.min(p.remainingSeconds,elapsed),false);}p.running=false;p.startedAt=null;p.elapsedSeconds=0;p.remainingSeconds=(p.sessionKind==='break'?p.breakMinutes:p.focusMinutes)*60;persist();break;}
+    case 'pomodoro-skip': {const p=pomodoroState();if(p.running){const elapsed=Math.max(0,Math.floor((Date.now()-Date.parse(p.startedAt))/1000));logPomodoroTime(p,Math.min(p.remainingSeconds,elapsed),false);}p.running=false;p.startedAt=null;p.elapsedSeconds=0;p.sessionKind=p.sessionKind==='break'?'focus':'break';p.remainingSeconds=(p.sessionKind==='break'?p.breakMinutes:p.focusMinutes)*60;persist();break;}
     case 'prioritize-capture': {
       const input=qs('#priority-capture-input'), val=input&&input.value.trim();
       if(val){ const kind=qs('#priority-capture-kind')?.value==='suggestion'?'suggestion':'task'; newItem({title:val,category:'Inbox',status:'open',registryKind:kind}); persist(); }
