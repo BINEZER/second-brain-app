@@ -1339,6 +1339,8 @@ const ui = {
   triageLastCat: null,        // domain last filed to during Process Inbox
   projectFilter: 'all',     // life area filter for Projects view
   projectKindFilter: 'all', // all | portfolio | program | project
+  projectSort: 'manual', // manual | title | due | priority | progress
+  taskSort: 'manual', // manual | title | due | priority | created
   expandedProjects: new Set(),
   showArchived: false,
   // Inbox filters. Each is a list of chosen values; empty means no restriction.
@@ -2462,7 +2464,7 @@ function renderSidebar(){
     ${navItem('prioritize', icon('reports'), 'Prioritize')}
     ${navItem('pomodoro', icon('now'), 'Focus Timer')}
     ${navItem('projects', icon('projects'), 'Projects')}
-    ${navItem('binder', icon('binder'), 'Life Binder')}
+
     ${navItem('habits', icon('habit'), 'Habits')}
     ${navItem('recurring', icon('repeat'), 'Recurring', recurrences().filter(r=>!r.paused).length||'')}
     ${navItem('reports', icon('reports'), 'Reports')}
@@ -2532,7 +2534,7 @@ function renderView(){
     case 'portfolio-review': return renderPortfolioReview();
     case 'inbox': return renderInboxView();
     case 'projects': return renderProjectsView();
-    case 'binder': return renderBinderView();
+    
     case 'habits': return renderHabitsView();
     case 'followups': return renderFollowupsView();
     case 'recurring': return renderRecurringView();
@@ -2993,7 +2995,7 @@ function renderInboxView(){
   const inboxDomains = Object.keys(domCounts).sort((a,b)=>a==='Inbox'?-1:b==='Inbox'?1:a.localeCompare(b)).map(k=>[k,domCounts[k]]);
   const projList = projects();
   const assignees = Array.from(new Set(allOpenTasks().filter(i=>i.assignee).map(i=>i.assignee))).sort();
-  const list = inboxViewList();
+  const list = sortTaskItems(inboxViewList());
   return `<div class="view">
     <div class="view-head">
       <div><div class="view-title">Inbox</div><div class="view-sub">Every open task, wherever it lives. Capture here, then process the unfiled ones.</div></div>
@@ -3012,6 +3014,7 @@ function renderInboxView(){
     </div>
     <div class="filter-bar">
       ${searchBox('inbox-search', ui.inboxSearch, 'Search tasks, projects, domains, owners…')}
+      <label class="view-sub" style="display:flex;align-items:center;gap:6px;white-space:nowrap">Sort <select data-action-change="task-sort" style="width:auto"><option value="manual" ${ui.taskSort==='manual'?'selected':''}>Manual order</option><option value="title" ${ui.taskSort==='title'?'selected':''}>Name A–Z</option><option value="due" ${ui.taskSort==='due'?'selected':''}>Due date</option><option value="priority" ${ui.taskSort==='priority'?'selected':''}>Priority</option><option value="created" ${ui.taskSort==='created'?'selected':''}>Newest first</option></select></label>
       ${ui.inboxSearch? `<button class="btn btn-sm" data-action="clear-inbox-search">Clear</button>`:''}
       ${inboxDomains.length? `<button class="btn btn-sm ${ui.inboxCategories.length?'btn-primary':''}" data-action="pick-domains">${esc(pickLabel(ui.inboxCategories,'Any domain','domains'))} ▾</button>`:''}
       ${projList.length? `<button class="btn btn-sm ${ui.inboxProjects.length?'btn-primary':''}" data-action="pick-projects">${esc(pickLabel(ui.inboxProjects,'Any project','projects', id=>(byId(id)||{title:'?'}).title))} ▾</button>`:''}
@@ -3126,15 +3129,24 @@ function filterProjectViewItems(list){
     || (p.subtasks||[]).some(st=>matchesSearch(st.title, ui.projectSearch)));
   return list;
 }
-function projectViewList(){
-  let list = projects().filter(p=>p.status!=='done');
-  if(!ui.showArchived) list = list.filter(p=>inactiveProjects.indexOf(p.id)===-1);
-  return filterProjectViewItems(list);
+function sortProjectItems(list){
+  const arr=list.slice(),rank={high:0,medium:1,low:2};
+  if(ui.projectSort==='title')arr.sort((a,b)=>String(a.title||'').localeCompare(String(b.title||'')));
+  else if(ui.projectSort==='due')arr.sort((a,b)=>(a.dueDate||'9999').localeCompare(b.dueDate||'9999')||String(a.title||'').localeCompare(String(b.title||'')));
+  else if(ui.projectSort==='priority')arr.sort((a,b)=>(rank[a.priority]??1)-(rank[b.priority]??1)||String(a.title||'').localeCompare(String(b.title||'')));
+  else if(ui.projectSort==='progress')arr.sort((a,b)=>(projectStats(b).pct??-1)-(projectStats(a).pct??-1));
+  return arr;
 }
-function completedProjectViewList(){
-  // Completed records are always shown in their own section, even when archived.
-  return filterProjectViewItems(projects().filter(p=>p.status==='done'));
+function sortTaskItems(list){
+  const arr=list.slice(),rank={high:0,medium:1,low:2};
+  if(ui.taskSort==='title')arr.sort((a,b)=>String(a.title||'').localeCompare(String(b.title||'')));
+  else if(ui.taskSort==='due')arr.sort((a,b)=>(a.dueDate||'9999').localeCompare(b.dueDate||'9999')||String(a.title||'').localeCompare(String(b.title||'')));
+  else if(ui.taskSort==='priority')arr.sort((a,b)=>(rank[a.priority]??1)-(rank[b.priority]??1)||String(a.title||'').localeCompare(String(b.title||'')));
+  else if(ui.taskSort==='created')arr.sort((a,b)=>String(b.createdAt||'').localeCompare(String(a.createdAt||'')));
+  return arr;
 }
+function projectViewList(){let list=projects().filter(p=>p.status!=='done');if(!ui.showArchived)list=list.filter(p=>inactiveProjects.indexOf(p.id)===-1);return sortProjectItems(filterProjectViewItems(list));}
+function completedProjectViewList(){return sortProjectItems(filterProjectViewItems(projects().filter(p=>p.status==='done')));}
 
 function renderProjectsView(){
   const areas = state.state.lifeAreas;
@@ -3142,7 +3154,7 @@ function renderProjectsView(){
   const completedList = completedProjectViewList();
   return `<div class="view">
     <div class="view-head">
-      <div><div class="view-title">Projects</div><div class="view-sub">Grouped by Life Binder domain — everything with more than one step lives here.</div></div>
+      <div><div class="view-title">Projects</div><div class="view-sub">Grouped by life domain — everything with more than one step lives here.</div></div>
       <button class="btn btn-primary" data-action="new-project">+ New project</button>
       <button class="btn" data-action="new-project" data-kind="program" title="A programme holds projects that share an outcome">+ Programme</button>
       <button class="btn" data-action="new-project" data-kind="portfolio" title="A portfolio holds programmes and projects">+ Portfolio</button>
@@ -3161,6 +3173,7 @@ function renderProjectsView(){
     </div>
     <div class="filter-bar">
       ${searchBox('project-search', ui.projectSearch, 'Search projects, domains, owners, milestones…')}
+      <label class="view-sub" style="display:flex;align-items:center;gap:6px;white-space:nowrap">Sort <select data-action-change="project-sort" style="width:auto"><option value="manual" ${ui.projectSort==='manual'?'selected':''}>Manual order</option><option value="title" ${ui.projectSort==='title'?'selected':''}>Name A–Z</option><option value="due" ${ui.projectSort==='due'?'selected':''}>Due date</option><option value="priority" ${ui.projectSort==='priority'?'selected':''}>Priority</option><option value="progress" ${ui.projectSort==='progress'?'selected':''}>Progress</option></select></label>
       ${ui.projectSearch? `<button class="btn btn-sm" data-action="clear-project-search">Clear</button>`:''}
       <button class="btn btn-sm" data-action="manage-domains">Manage domains</button>
     </div>
@@ -3190,7 +3203,7 @@ function renderProjectsSummary(list){
 }
 
 function renderProjectCard(p, i, completedSection){
-  const children = tasksOf(p.id);
+  const children = sortTaskItems(tasksOf(p.id));
   const st = projectStats(p);
   const expanded = ui.expandedProjects.has(p.id);
   const archived = inactiveProjects.indexOf(p.id)>=0;
@@ -4836,7 +4849,7 @@ function modalConvertToProject(item){
   openModal(`
     <h3>Convert to Project</h3>
     <div class="view-sub" style="margin-bottom:14px">“${esc(item.title)}” will move out of the Inbox and become a project.</div>
-    <div class="field"><label>Life Binder domain</label>
+    <div class="field"><label>Life domain</label>
       <select id="conv-cat">${areas.map(a=>`<option value="${esc(a.name)}">${esc(a.name)}</option>`).join('')}</select>
     </div>
     <div class="modal-actions">
@@ -4925,7 +4938,7 @@ function modalNewProject(kind){
     </div>
     ${kind!=='portfolio' && parents.length ? `<div class="field"><label>Sits under (optional)</label>
       <select id="np-parent"><option value="">Nothing — stands on its own</option>${parents.map(x=>`<option value="${esc(x.id)}">${PROJECT_KINDS[x.kind].mark} ${esc(x.title)}</option>`).join('')}</select></div>`:''}
-    <div class="field"><label>Life Binder domain</label><select id="np-cat">${areas.map(a=>`<option value="${esc(a.name)}">${esc(a.name)}</option>`).join('')}</select></div>
+    <div class="field"><label>Life domain</label><select id="np-cat">${areas.map(a=>`<option value="${esc(a.name)}">${esc(a.name)}</option>`).join('')}</select></div>
     <div class="field"><label>Priority</label><select id="np-pri"><option value="low">Low</option><option value="medium" selected>Medium</option><option value="high">High</option></select></div>
     <div class="field"><label>Start date (optional)</label><input id="np-start" type="date"/><div class="view-sub" style="margin-top:4px">Leave blank to measure the schedule from today. Set it when work begins later.</div></div>
     <div class="field"><label>Due date (optional)</label><input id="np-due" type="date"/></div>
@@ -5398,7 +5411,7 @@ function modalAddField(p){
 }
 
 function modalProjectDetail(p){
-  const children = tasksOf(p.id);
+  const children = sortTaskItems(tasksOf(p.id));
   const st = projectStats(p);
   const hist = projectHistory(p, 14);
   const eff = k=>`<span class="effort-chip" style="cursor:default" title="Effort weight ${(EFFORT[k]||EFFORT[DEFAULT_EFFORT]).weight}">${(EFFORT[k]||EFFORT[DEFAULT_EFFORT]).label}</span>`;
@@ -7224,6 +7237,8 @@ function handleAction(action, el){
       } else pushToast('This item could not be found. It may have been archived or deleted.');
       break;
     }
+    case 'project-sort': ui.projectSort=el.value||'manual'; render(); break;
+    case 'task-sort': ui.taskSort=el.value||'manual'; render(); break;
     case 'new-project': modalNewProject(el.getAttribute('data-kind')); break;
     // Switching level mid-form rebuilds it: a portfolio has no parent to pick and
     // no milestones to list, so the form should stop offering them.
