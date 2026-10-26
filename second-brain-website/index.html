@@ -3117,9 +3117,7 @@ function renderProcessInbox(){
 
 /* ---------- PROJECTS ---------- */
 /* Exactly the cards the Projects tab is showing. Rendering and reordering share it. */
-function projectViewList(){
-  let list = projects();
-  if(!ui.showArchived) list = list.filter(p=>inactiveProjects.indexOf(p.id)===-1);
+function filterProjectViewItems(list){
   if(ui.projectKindFilter!=='all') list = list.filter(p=>(p.kind||'project')===ui.projectKindFilter);
   if(ui.projectFilter!=='all') list = list.filter(p=>p.category===ui.projectFilter);
   if(ui.projectSearch) list = list.filter(p=>matchesSearch(p.title, ui.projectSearch)
@@ -3128,10 +3126,20 @@ function projectViewList(){
     || (p.subtasks||[]).some(st=>matchesSearch(st.title, ui.projectSearch)));
   return list;
 }
+function projectViewList(){
+  let list = projects().filter(p=>p.status!=='done');
+  if(!ui.showArchived) list = list.filter(p=>inactiveProjects.indexOf(p.id)===-1);
+  return filterProjectViewItems(list);
+}
+function completedProjectViewList(){
+  // Completed records are always shown in their own section, even when archived.
+  return filterProjectViewItems(projects().filter(p=>p.status==='done'));
+}
 
 function renderProjectsView(){
   const areas = state.state.lifeAreas;
   const list = projectViewList();
+  const completedList = completedProjectViewList();
   return `<div class="view">
     <div class="view-head">
       <div><div class="view-title">Projects</div><div class="view-sub">Grouped by Life Binder domain — everything with more than one step lives here.</div></div>
@@ -3158,7 +3166,9 @@ function renderProjectsView(){
     </div>
     ${renderProjectsSummary(list)}
     ${(projectViewLen = list.length, '')}
-    ${list.length? list.map((p,i)=>renderProjectCard(p,i)).join('') : `<div class="empty">${ui.projectSearch? 'No projects match that search.' : 'No projects in this domain yet.'}</div>`}
+    ${list.length? list.map((p,i)=>renderProjectCard(p,i)).join('') : `<div class="empty">${ui.projectSearch? 'No ongoing items match those filters.' : 'No ongoing projects in this view.'}</div>`}
+    <div class="section-heading" style="display:flex;align-items:center;justify-content:space-between;margin:28px 0 12px;padding-top:18px;border-top:1px solid var(--c-border)"><div><div class="pipeline-title">Completed</div><div class="view-sub">Finished projects, programs, and portfolios — kept separate from ongoing work.</div></div><span class="chip">${completedList.length}</span></div>
+    ${completedList.length? completedList.map((p,i)=>renderProjectCard(p,i,true)).join('') : `<div class="empty">No completed projects, programs, or portfolios match those filters.</div>`}
   </div>`;
 }
 
@@ -3179,12 +3189,12 @@ function renderProjectsSummary(list){
   return `<div class="view-sub" style="margin:-6px 0 16px">${bits.join(' · ')} · <a href="#" data-action="open-portfolio-report" style="color:var(--c-focus);font-weight:600">full roll-up →</a></div>`;
 }
 
-function renderProjectCard(p, i){
+function renderProjectCard(p, i, completedSection){
   const children = tasksOf(p.id);
   const st = projectStats(p);
   const expanded = ui.expandedProjects.has(p.id);
   const archived = inactiveProjects.indexOf(p.id)>=0;
-  return `<div class="project-card" data-dnd-row style="${archived?'opacity:.55':''}">
+  return `<div class="project-card" ${completedSection?'':'data-dnd-row'} style="${archived?'opacity:.55':''}">
     <div class="project-head" data-action="toggle-expand" data-id="${p.id}">
       ${numLabel(i)}
       <button class="check ${p.status==='done'?'done':''}" data-action="complete" data-id="${p.id}">${checkSvg()}</button>
@@ -3208,7 +3218,7 @@ function renderProjectCard(p, i){
         ${progressBar(st)}
       </div>
       <div class="item-actions">
-        ${moveTools('move-project', p.id, i, projectViewCount())}
+        ${completedSection?'':moveTools('move-project', p.id, i, projectViewCount())}
         <button class="icon-btn btn-sm" data-action="toggle-star" data-id="${p.id}" title="Star">⭐</button>
         <button class="icon-btn btn-sm" data-action="open-editor" data-id="${p.id}" title="Edit project — dates, domain, owner">✎</button>
         <button class="icon-btn btn-sm" data-action="export-project" data-id="${p.id}" title="Export report">⇩</button>
