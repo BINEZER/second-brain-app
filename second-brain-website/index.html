@@ -2458,6 +2458,7 @@ function renderSidebar(){
     ${navItem('dashboard', icon('reports'), 'My Life Dashboard')}
     ${navItem('inbox', icon('inbox'), 'Inbox', inboxCount||'')}
     ${navItem('now', icon('now'), 'Now / Today')}
+    ${navItem('prioritize', icon('reports'), 'Prioritize')}
     ${navItem('projects', icon('projects'), 'Projects')}
     ${navItem('binder', icon('binder'), 'Life Binder')}
     ${navItem('habits', icon('habit'), 'Habits')}
@@ -2534,6 +2535,7 @@ function renderView(){
     case 'followups': return renderFollowupsView();
     case 'recurring': return renderRecurringView();
     case 'reports': return renderReportsView();
+    case 'prioritize': return renderPrioritizeView();
     case 'review': return renderReviewView();
     case 'settings': return renderSettingsView();
     default: return renderNowView();
@@ -2636,6 +2638,51 @@ function renderLifeDashboard(){
       'What should receive more or less attention next month?'
     ],'portfolio-review','Review portfolio') +
     '</div></div>';
+}
+
+
+/* ---------- PRIORITIZATION REGISTRY ---------- */
+const EISENHOWER_QUADRANTS = {
+  do:{title:'Do first',subtitle:'Important + urgent',action:'Act on it now',order:0},
+  schedule:{title:'Schedule',subtitle:'Important + not urgent',action:'Protect time for it',order:1},
+  delegate:{title:'Delegate / simplify',subtitle:'Urgent + less important',action:'Hand off or reduce it',order:2},
+  defer:{title:'Defer / drop',subtitle:'Neither important nor urgent',action:'Park it or remove it',order:3}
+};
+function prioritizationEntries(){
+  const today=todayISO(), soon=fmtISO(addDays(new Date(),3));
+  return items().filter(it=>(it.type==='task'||it.type==='project')&&it.status!=='done'&&it.status!=='archived'
+      &&inactiveProjects.indexOf(it.id)===-1&&(!it.projectId||inactiveProjects.indexOf(it.projectId)===-1))
+    .map(it=>{
+      const overdue=!!it.dueDate&&it.dueDate<today, dueSoon=!!it.dueDate&&it.dueDate>=today&&it.dueDate<=soon;
+      const blocked=it.status==='blocked'||it.blocked===true||!!it.blockedReason;
+      const urgent=overdue||dueSoon||blocked;
+      const important=it.type==='project'||it.priority==='high'||it.isStarred===true;
+      const suggested=important?(urgent?'do':'schedule'):(urgent?'delegate':'defer');
+      const reason=overdue?'Overdue':blocked?'Blocked / waiting':dueSoon?'Due within 3 days':it.isStarred?'Starred priority':it.priority==='high'?'High priority':it.type==='project'?'Project-level commitment':'No urgent deadline or high-priority flag';
+      const manual=!!EISENHOWER_QUADRANTS[it.eisenhowerQuadrant];
+      return {item:it,quadrant:manual?it.eisenhowerQuadrant:suggested,suggested,reason,manual};
+    }).sort((a,b)=>EISENHOWER_QUADRANTS[a.quadrant].order-EISENHOWER_QUADRANTS[b.quadrant].order
+      ||((a.item.dueDate||'9999-99-99').localeCompare(b.item.dueDate||'9999-99-99')));
+}
+function renderPrioritizeView(){
+  const entries=prioritizationEntries();
+  const esc=value=>String(value==null?'':value).replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+  const counts=Object.fromEntries(Object.keys(EISENHOWER_QUADRANTS).map(k=>[k,entries.filter(e=>e.quadrant===k).length]));
+  const quadrantCard=key=>{
+    const q=EISENHOWER_QUADRANTS[key], list=entries.filter(e=>e.quadrant===key);
+    return '<section class="card" style="min-width:0"><div class="pipeline-head"><div><div class="pipeline-title">'+q.title+'</div><div class="view-sub">'+q.subtitle+'</div></div><span class="chip">'+list.length+'</span></div>'+
+      (list.length?list.map(e=>{
+        const it=e.item, due=it.dueDate?' · due '+esc(new Date(it.dueDate+'T12:00:00').toLocaleDateString(undefined,{month:'short',day:'numeric'})):'';
+        const kind=it.type==='project'?'Project':it.registryKind==='suggestion'?'Suggestion':'Task';
+        const why=e.manual?'Your classification':e.reason+' · suggested';
+        return '<div class="pipeline-row" style="align-items:flex-start"><div class="item-main" style="min-width:0"><button class="clickable-title" data-action="prioritize-open" data-id="'+esc(it.id)+'" style="text-align:left">'+esc(it.title||'Untitled')+'</button><div class="item-meta">'+kind+' · '+esc(it.category||'Unfiled')+due+'</div><div class="view-sub" style="margin-top:4px">'+esc(why)+'</div><select aria-label="Priority quadrant for '+esc(it.title)+'" data-action-change="prioritize-quadrant" data-id="'+esc(it.id)+'" style="margin-top:7px;max-width:100%;font-size:12px;padding:6px;border:1px solid var(--c-border);border-radius:8px;background:var(--c-surface);color:var(--c-text)"><option value="auto" '+(!e.manual?'selected':'')+'>Use suggestion: '+esc(EISENHOWER_QUADRANTS[e.suggested].title)+'</option>'+Object.keys(EISENHOWER_QUADRANTS).map(k=>'<option value="'+k+'" '+(e.manual&&it.eisenhowerQuadrant===k?'selected':'')+'>'+esc(EISENHOWER_QUADRANTS[k].title)+'</option>').join('')+'</select></div><button class="btn btn-sm" data-action="prioritize-complete" data-id="'+esc(it.id)+'" title="Mark complete">✓</button></div>';
+      }).join(''):'<div class="view-sub" style="padding:12px 0">Nothing here right now.</div>')+'</section>';
+  };
+  return '<div class="view"><div class="view-head"><div><div class="view-title">Prioritize</div><div class="view-sub">A task and project registry using the Eisenhower Matrix. Suggestions use existing dates, status, stars and priority flags; you can override any suggestion.</div></div><button class="btn" data-action="nav" data-view="weekly-review">Weekly review</button></div>'+
+    '<section class="card" style="margin-bottom:14px"><div class="pipeline-head"><div class="pipeline-title">Capture a task or idea</div></div><div class="capture" style="margin-bottom:0"><input id="priority-capture-input" aria-label="New task or suggestion" placeholder="What needs deciding or doing?" autocomplete="off"/><select id="priority-capture-kind" aria-label="Entry type" style="border:1px solid var(--c-border);border-radius:10px;padding:9px;background:var(--c-surface);color:var(--c-text)"><option value="task">Task</option><option value="suggestion">Idea / suggestion</option></select><button class="btn btn-primary" data-action="prioritize-capture">＋ Add</button></div><div class="view-sub" style="margin-top:8px">New entries start in Inbox. Suggestions stay as uncommitted ideas until you decide what to do with them.</div></section>'+
+    '<div class="rollup-grid">'+Object.keys(EISENHOWER_QUADRANTS).map(k=>'<div class="rollup-tile"><div class="v">'+counts[k]+'</div><div class="k">'+esc(EISENHOWER_QUADRANTS[k].title)+'</div><div class="drill">'+esc(EISENHOWER_QUADRANTS[k].action)+'</div></div>').join('')+'</div>'+
+    '<div class="view-sub" style="margin:8px 0 14px">Showing '+entries.length+' open tasks and unarchived projects. Start with one to three priorities; the matrix is a guide, not an automatic commitment.</div>'+
+    '<div class="grid-two" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,340px),1fr));gap:14px">'+Object.keys(EISENHOWER_QUADRANTS).map(quadrantCard).join('')+'</div></div>';
 }
 
 function renderWeeklyReview(){
@@ -6480,6 +6527,17 @@ function handleAction(action, el){
     case 'process-inbox': ui.processInbox = true; ui.triageIndex = 0; ui.triageSkipped = []; render(); break;
     case 'exit-triage': ui.processInbox = false; render(); break;
 
+    case 'prioritize-capture': {
+      const input=qs('#priority-capture-input'), val=input&&input.value.trim();
+      if(val){ const kind=qs('#priority-capture-kind')?.value==='suggestion'?'suggestion':'task'; newItem({title:val,category:'Inbox',status:'open',registryKind:kind}); persist(); }
+      break;
+    }
+    case 'prioritize-quadrant': {
+      if(item){ const value=el.value; if(value==='auto') delete item.eisenhowerQuadrant; else if(EISENHOWER_QUADRANTS[value]) item.eisenhowerQuadrant=value; persist(); }
+      break;
+    }
+    case 'prioritize-open': if(item){ ui.view=item.type==='project'?'projects':'inbox'; render(); } break;
+    case 'prioritize-complete': if(item){ completeItem(item); persist(); } break;
     case 'capture-add': {
       const input = qs('#capture-input');
       const val = input && input.value.trim();
