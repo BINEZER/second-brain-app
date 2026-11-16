@@ -1,0 +1,20 @@
+{
+  "id": "/",
+  "name": "Second Brain",
+  "short_name": "Second Brain",
+  "description": "Your personal second brain for projects, tasks, habits and life areas.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#F8FAFC",
+  "theme_color": "#F8FAFC",
+  "prefer_related_applications": false,
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
